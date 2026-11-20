@@ -903,6 +903,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_kt_ffi_checksum_method_ktnode_delete_envelope(
     ): Int
+    external fun uniffi_kt_ffi_checksum_method_ktnode_delete_repeating(
+    ): Int
     external fun uniffi_kt_ffi_checksum_method_ktnode_delete_tx(
     ): Int
     external fun uniffi_kt_ffi_checksum_method_ktnode_export_csv(
@@ -913,6 +915,10 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_kt_ffi_checksum_method_ktnode_payees(
     ): Int
+    external fun uniffi_kt_ffi_checksum_method_ktnode_post_due(
+    ): Int
+    external fun uniffi_kt_ffi_checksum_method_ktnode_repeating(
+    ): Int
     external fun uniffi_kt_ffi_checksum_method_ktnode_restore_tx(
     ): Int
     external fun uniffi_kt_ffi_checksum_method_ktnode_set_account(
@@ -920,6 +926,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_kt_ffi_checksum_method_ktnode_set_currency(
     ): Int
     external fun uniffi_kt_ffi_checksum_method_ktnode_set_envelope(
+    ): Int
+    external fun uniffi_kt_ffi_checksum_method_ktnode_set_repeating(
     ): Int
     external fun uniffi_kt_ffi_checksum_method_ktnode_set_tx(
     ): Int
@@ -1129,6 +1137,8 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_kt_ffi_fn_method_ktnode_delete_envelope(`ptr`: Long,`listId`: RustBuffer.ByValue,`envelopeId`: RustBuffer.ByValue,`undo`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_kt_ffi_fn_method_ktnode_delete_repeating(`ptr`: Long,`listId`: RustBuffer.ByValue,`repeatId`: RustBuffer.ByValue,`undo`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     external fun uniffi_kt_ffi_fn_method_ktnode_delete_tx(`ptr`: Long,`listId`: RustBuffer.ByValue,`txId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_kt_ffi_fn_method_ktnode_export_csv(`ptr`: Long,`listId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1139,6 +1149,10 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_kt_ffi_fn_method_ktnode_payees(`ptr`: Long,`listId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_kt_ffi_fn_method_ktnode_post_due(`ptr`: Long,`listId`: RustBuffer.ByValue,`today`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kt_ffi_fn_method_ktnode_repeating(`ptr`: Long,`listId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_kt_ffi_fn_method_ktnode_restore_tx(`ptr`: Long,`listId`: RustBuffer.ByValue,`tx`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_kt_ffi_fn_method_ktnode_set_account(`ptr`: Long,`listId`: RustBuffer.ByValue,`accountId`: RustBuffer.ByValue,`name`: RustBuffer.ByValue,`kind`: RustBuffer.ByValue,`start`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -1146,6 +1160,8 @@ internal object UniffiLib {
     external fun uniffi_kt_ffi_fn_method_ktnode_set_currency(`ptr`: Long,`listId`: RustBuffer.ByValue,`currency`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_kt_ffi_fn_method_ktnode_set_envelope(`ptr`: Long,`listId`: RustBuffer.ByValue,`envelopeId`: RustBuffer.ByValue,`name`: RustBuffer.ByValue,`amount`: Long,`kind`: RustBuffer.ByValue,`due`: RustBuffer.ByValue,`group`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kt_ffi_fn_method_ktnode_set_repeating(`ptr`: Long,`listId`: RustBuffer.ByValue,`repeatId`: RustBuffer.ByValue,`every`: RustBuffer.ByValue,`tx`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kt_ffi_fn_method_ktnode_set_tx(`ptr`: Long,`listId`: RustBuffer.ByValue,`txId`: RustBuffer.ByValue,`tx`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1565,6 +1581,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_kt_ffi_checksum_method_ktnode_delete_envelope() and 0xFFFF) != 24212) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_kt_ffi_checksum_method_ktnode_delete_repeating() and 0xFFFF) != 37582) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_kt_ffi_checksum_method_ktnode_delete_tx() and 0xFFFF) != 61966) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1580,6 +1599,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_kt_ffi_checksum_method_ktnode_payees() and 0xFFFF) != 49045) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_kt_ffi_checksum_method_ktnode_post_due() and 0xFFFF) != 23421) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_kt_ffi_checksum_method_ktnode_repeating() and 0xFFFF) != 12714) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_kt_ffi_checksum_method_ktnode_restore_tx() and 0xFFFF) != 49923) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1590,6 +1615,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_kt_ffi_checksum_method_ktnode_set_envelope() and 0xFFFF) != 681) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_kt_ffi_checksum_method_ktnode_set_repeating() and 0xFFFF) != 16692) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_kt_ffi_checksum_method_ktnode_set_tx() and 0xFFFF) != 60716) {
@@ -3194,6 +3222,11 @@ public interface KtNodeInterface {
     
     fun `deleteEnvelope`(`listId`: kotlin.String, `envelopeId`: kotlin.String, `undo`: kotlin.Boolean)
     
+    /**
+     * Stop a repeating entry (what it posted stays); `undo` starts it again.
+     */
+    fun `deleteRepeating`(`listId`: kotlin.String, `repeatId`: kotlin.String, `undo`: kotlin.Boolean)
+    
     fun `deleteTx`(`listId`: kotlin.String, `txId`: kotlin.String)
     
     /**
@@ -3215,6 +3248,14 @@ public interface KtNodeInterface {
     fun `payees`(`listId`: kotlin.String): List<PayeeItem>
     
     /**
+     * Post what repeating entries have due up to `today`; returns the new entries' ids (empty =
+     * nothing changed, and nothing was written).
+     */
+    fun `postDue`(`listId`: kotlin.String, `today`: kotlin.String): List<kotlin.String>
+    
+    fun `repeating`(`listId`: kotlin.String): List<RepeatItem>
+    
+    /**
      * Undo a delete: the entry as `budget_activity` showed it.
      */
     fun `restoreTx`(`listId`: kotlin.String, `tx`: TxItem)
@@ -3224,6 +3265,12 @@ public interface KtNodeInterface {
     fun `setCurrency`(`listId`: kotlin.String, `currency`: kotlin.String)
     
     fun `setEnvelope`(`listId`: kotlin.String, `envelopeId`: kotlin.String?, `name`: kotlin.String, `amount`: kotlin.Long, `kind`: kotlin.String, `due`: kotlin.String?, `group`: kotlin.String): kotlin.String
+    
+    /**
+     * Start (`repeat_id` None) or change a repeating entry; `tx.date` is its first date. Call
+     * [`Self::post_due`] after it to post what is due.
+     */
+    fun `setRepeating`(`listId`: kotlin.String, `repeatId`: kotlin.String?, `every`: kotlin.String, `tx`: TxEdit): kotlin.String
     
     /**
      * Add (`tx_id` None) or change an entry. Returns its id.
@@ -4686,6 +4733,25 @@ open class KtNode: Disposable, AutoCloseable, KtNodeInterface
     
 
     
+    /**
+     * Stop a repeating entry (what it posted stays); `undo` starts it again.
+     */
+    @Throws(KtException::class)override fun `deleteRepeating`(`listId`: kotlin.String, `repeatId`: kotlin.String, `undo`: kotlin.Boolean)
+        = 
+    callWithHandle {
+    uniffiRustCallWithError(KtException) { _status ->
+    UniffiLib.uniffi_kt_ffi_fn_method_ktnode_delete_repeating(
+        it,
+        
+        FfiConverterString.lower(`listId`),
+        FfiConverterString.lower(`repeatId`),
+        FfiConverterBoolean.lower(`undo`),_status)
+}
+    }
+    
+    
+
+    
     @Throws(KtException::class)override fun `deleteTx`(`listId`: kotlin.String, `txId`: kotlin.String)
         = 
     callWithHandle {
@@ -4775,6 +4841,41 @@ open class KtNode: Disposable, AutoCloseable, KtNodeInterface
 
     
     /**
+     * Post what repeating entries have due up to `today`; returns the new entries' ids (empty =
+     * nothing changed, and nothing was written).
+     */
+    @Throws(KtException::class)override fun `postDue`(`listId`: kotlin.String, `today`: kotlin.String): List<kotlin.String> {
+            return FfiConverterSequenceString.lift(
+    callWithHandle {
+    uniffiRustCallWithError(KtException) { _status ->
+    UniffiLib.uniffi_kt_ffi_fn_method_ktnode_post_due(
+        it,
+        
+        FfiConverterString.lower(`listId`),
+        FfiConverterString.lower(`today`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(KtException::class)override fun `repeating`(`listId`: kotlin.String): List<RepeatItem> {
+            return FfiConverterSequenceTypeRepeatItem.lift(
+    callWithHandle {
+    uniffiRustCallWithError(KtException) { _status ->
+    UniffiLib.uniffi_kt_ffi_fn_method_ktnode_repeating(
+        it,
+        
+        FfiConverterString.lower(`listId`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Undo a delete: the entry as `budget_activity` showed it.
      */
     @Throws(KtException::class)override fun `restoreTx`(`listId`: kotlin.String, `tx`: TxItem)
@@ -4840,6 +4941,28 @@ open class KtNode: Disposable, AutoCloseable, KtNodeInterface
         FfiConverterString.lower(`kind`),
         FfiConverterOptionalString.lower(`due`),
         FfiConverterString.lower(`group`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Start (`repeat_id` None) or change a repeating entry; `tx.date` is its first date. Call
+     * [`Self::post_due`] after it to post what is due.
+     */
+    @Throws(KtException::class)override fun `setRepeating`(`listId`: kotlin.String, `repeatId`: kotlin.String?, `every`: kotlin.String, `tx`: TxEdit): kotlin.String {
+            return FfiConverterString.lift(
+    callWithHandle {
+    uniffiRustCallWithError(KtException) { _status ->
+    UniffiLib.uniffi_kt_ffi_fn_method_ktnode_set_repeating(
+        it,
+        
+        FfiConverterString.lower(`listId`),
+        FfiConverterOptionalString.lower(`repeatId`),
+        FfiConverterString.lower(`every`),
+        FfiConverterTypeTxEdit.lower(`tx`),_status)
 }
     }
     )
@@ -6301,6 +6424,61 @@ public object FfiConverterTypeReminderItem: FfiConverterRustBuffer<ReminderItem>
             FfiConverterString.write(value.`taskId`, buf)
             FfiConverterString.write(value.`title`, buf)
             FfiConverterULong.write(value.`atMs`, buf)
+    }
+}
+
+
+
+/**
+ * A repeating entry: what it posts (`tx.date` = its first date; `tx.id` = the repeat's id) and
+ * the next date it will post.
+ */
+data class RepeatItem (
+    var `id`: kotlin.String
+    , 
+    /**
+     * "w" weekly, "2w" every two weeks, "m" monthly, "y" yearly.
+     */
+    var `every`: kotlin.String
+    , 
+    var `next`: kotlin.String
+    , 
+    var `tx`: TxItem
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeRepeatItem: FfiConverterRustBuffer<RepeatItem> {
+    override fun read(buf: ByteBuffer): RepeatItem {
+        return RepeatItem(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterTypeTxItem.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: RepeatItem) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`every`) +
+            FfiConverterString.allocationSize(value.`next`) +
+            FfiConverterTypeTxItem.allocationSize(value.`tx`)
+    )
+
+    override fun write(value: RepeatItem, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterString.write(value.`every`, buf)
+            FfiConverterString.write(value.`next`, buf)
+            FfiConverterTypeTxItem.write(value.`tx`, buf)
     }
 }
 
@@ -8055,6 +8233,34 @@ public object FfiConverterSequenceTypeReminderItem: FfiConverterRustBuffer<List<
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeReminderItem.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeRepeatItem: FfiConverterRustBuffer<List<RepeatItem>> {
+    override fun read(buf: ByteBuffer): List<RepeatItem> {
+        val len = buf.getInt()
+        return List<RepeatItem>(len) {
+            FfiConverterTypeRepeatItem.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<RepeatItem>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeRepeatItem.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<RepeatItem>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeRepeatItem.write(it, buf)
         }
     }
 }

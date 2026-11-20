@@ -62,6 +62,7 @@ import com.jurisgames.sobres.core.BudgetView
 import com.jurisgames.sobres.core.EnvelopeItem
 import com.jurisgames.sobres.core.ListItem
 import com.jurisgames.sobres.core.PartItem
+import com.jurisgames.sobres.core.RepeatItem
 import com.jurisgames.sobres.core.TxEdit
 import com.jurisgames.sobres.core.TxItem
 import com.jurisgames.sobres.core.accentColor
@@ -131,7 +132,12 @@ enum class Section(val label: String, val tag: String) {
 }
 
 /** What the Add sheet opens on. */
-class AddRequest(val kind: String, val edit: TxItem? = null, val envelope: String? = null)
+class AddRequest(val kind: String, val edit: TxItem? = null, val envelope: String? = null, val repeat: RepeatItem? = null)
+
+/** How often a repeating entry comes back (core: "w", "2w", "m", "y"). */
+private val EVERY = listOf("w" to "Every week", "2w" to "Every 2 weeks", "m" to "Every month", "y" to "Every year")
+
+private fun TxItem.toEdit() = TxEdit(kind, date, amount, accountId, toId, payee, note, parts)
 
 /**
  * A budget: title bar, the sections, and the "Spent…" bar that is always there (docs/UI-SPEC.md).
@@ -156,6 +162,11 @@ fun BudgetPane(
     val day = today()
     val b = remember(node, env.version, list.id, day) { runCatching { node.budget(list.id, day) }.getOrNull() } ?: return
     val activity = remember(node, env.version, list.id) { runCatching { node.budgetActivity(list.id) }.getOrDefault(emptyList()) }
+    val repeating = remember(node, env.version, list.id) { runCatching { node.repeating(list.id) }.getOrDefault(emptyList()) }
+    // Rent, pay, bills: what repeats is posted when its day comes (on any device; the same entry once).
+    androidx.compose.runtime.LaunchedEffect(node, list.id, day, env.version) {
+        if (runCatching { node.postDue(list.id, day) }.getOrDefault(emptyList()).isNotEmpty()) env.changed()
+    }
     var section by remember(list.id) { mutableStateOf(Section.Envelopes) }
     var menuOpen by remember { mutableStateOf(false) }
     var add by remember { mutableStateOf<AddRequest?>(null) }
@@ -220,7 +231,7 @@ fun BudgetPane(
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (section) {
                 Section.Envelopes -> EnvelopesView(b, accent, onFill = { fill = 0L }, onOpen = { openEnv = it.id }, onNew = { newEnv = true })
-                Section.Activity -> ActivityView(b, activity, shared, onOpen = { add = AddRequest(it.kind, it) })
+                Section.Activity -> ActivityView(b, activity, repeating, shared, onOpen = { add = AddRequest(it.kind, it) }, onRepeat = { add = AddRequest(it.tx.kind, repeat = it) })
                 Section.Accounts -> AccountsView(b, onOpen = { editAcct = it }, onNew = { newAcct = true })
                 Section.Month -> MonthView(env, list, b, activity)
             }
@@ -518,24 +529,27 @@ private fun AddSheet(
 ) {
     val node = env.node
     val edit = req.edit
+    val rep = req.repeat
+    val src = edit ?: rep?.tx
     val payees = remember(node, env.version, list.id) { runCatching { node.payees(list.id) }.getOrDefault(emptyList()) }
     val lastAccount = activity.firstOrNull { it.kind == "exp" }?.accountId ?: b.accounts.firstOrNull()?.id ?: ""
-    var kind by remember { mutableStateOf(edit?.kind ?: req.kind) }
-    var refund by remember { mutableStateOf(edit != null && edit.kind == "exp" && edit.amount < 0) }
-    var amount by remember { mutableStateOf(edit?.let { centsText(kotlin.math.abs(if (it.kind == "fill") it.parts.filter { p -> p.cents > 0 }.sumOf { p -> p.cents } else it.amount)) } ?: "") }
-    var payee by remember { mutableStateOf(edit?.payee ?: "") }
-    var note by remember { mutableStateOf(edit?.note ?: "") }
-    var date by remember { mutableStateOf(edit?.date ?: today()) }
-    var account by remember { mutableStateOf(edit?.accountId?.takeIf { it.isNotEmpty() } ?: lastAccount) }
-    var toAccount by remember { mutableStateOf(edit?.toId?.takeIf { it.isNotEmpty() } ?: b.accounts.firstOrNull { it.id != account }?.id ?: "") }
+    var kind by remember { mutableStateOf(src?.kind ?: req.kind) }
+    var refund by remember { mutableStateOf(src != null && src.kind == "exp" && src.amount < 0) }
+    var amount by remember { mutableStateOf(src?.let { centsText(kotlin.math.abs(if (it.kind == "fill") it.parts.filter { p -> p.cents > 0 }.sumOf { p -> p.cents } else it.amount)) } ?: "") }
+    var payee by remember { mutableStateOf(src?.payee ?: "") }
+    var note by remember { mutableStateOf(src?.note ?: "") }
+    var date by remember { mutableStateOf(src?.date ?: today()) }
+    var account by remember { mutableStateOf(src?.accountId?.takeIf { it.isNotEmpty() } ?: lastAccount) }
+    var toAccount by remember { mutableStateOf(src?.toId?.takeIf { it.isNotEmpty() } ?: b.accounts.firstOrNull { it.id != account }?.id ?: "") }
     // Spent: one envelope, or a split (envelope -> typed amount)
-    var envelope by remember { mutableStateOf(edit?.parts?.singleOrNull()?.envelopeId ?: req.envelope ?: "") }
-    var split by remember { mutableStateOf(edit != null && edit.kind == "exp" && edit.parts.size > 1) }
-    var splitText by remember { mutableStateOf(edit?.takeIf { it.kind == "exp" }?.parts?.associate { it.envelopeId to centsText(kotlin.math.abs(it.cents)) } ?: emptyMap()) }
+    var envelope by remember { mutableStateOf(src?.parts?.singleOrNull()?.envelopeId ?: req.envelope ?: "") }
+    var split by remember { mutableStateOf(src != null && src.kind == "exp" && src.parts.size > 1) }
+    var splitText by remember { mutableStateOf(src?.takeIf { it.kind == "exp" }?.parts?.associate { it.envelopeId to centsText(kotlin.math.abs(it.cents)) } ?: emptyMap()) }
     // Move: from (envelope or Available) -> to
-    var from by remember { mutableStateOf(edit?.takeIf { it.kind == "fill" }?.parts?.firstOrNull { it.cents < 0 }?.envelopeId ?: req.envelope ?: AVAILABLE) }
-    var to by remember { mutableStateOf(edit?.takeIf { it.kind == "fill" }?.parts?.firstOrNull { it.cents > 0 }?.envelopeId ?: b.envelopes.firstOrNull { it.id != from }?.id ?: "") }
+    var from by remember { mutableStateOf(src?.takeIf { it.kind == "fill" }?.parts?.firstOrNull { it.cents < 0 }?.envelopeId ?: req.envelope ?: AVAILABLE) }
+    var to by remember { mutableStateOf(src?.takeIf { it.kind == "fill" }?.parts?.firstOrNull { it.cents > 0 }?.envelopeId ?: b.envelopes.firstOrNull { it.id != from }?.id ?: "") }
     var fillAfter by remember { mutableStateOf(false) }
+    var every by remember { mutableStateOf(rep?.every ?: "") }
     var pickDate by remember { mutableStateOf(false) }
     val focus = remember { FocusRequester() }
     androidx.compose.runtime.LaunchedEffect(Unit) { kotlinx.coroutines.delay(100); runCatching { focus.requestFocus() } }
@@ -560,6 +574,19 @@ private fun AddSheet(
     }
     fun save() {
         val t = input ?: return
+        if (every.isNotEmpty() && edit == null) {
+            val id = runCatching { node.setRepeating(list.id, rep?.id, every, t) }.getOrNull() ?: return
+            val posted = runCatching { node.postDue(list.id, today()) }.getOrDefault(emptyList())
+            val undo: () -> Unit = if (rep == null) ({
+                node.deleteRepeating(list.id, id, false)
+                for (p in posted) node.deleteTx(list.id, p)
+            }) else ({
+                node.setRepeating(list.id, rep.id, rep.every, rep.tx.toEdit())
+                for (p in posted) node.deleteTx(list.id, p)
+            })
+            onSaved(if (rep == null) tr("Saved") else tr("Changed"), undo, null)
+            return
+        }
         val id = runCatching { node.setTx(list.id, edit?.id, t) }.getOrNull() ?: return
         val undo: () -> Unit = if (edit == null) ({ node.deleteTx(list.id, id) }) else ({ node.restoreTx(list.id, edit) })
         onSaved(if (edit == null) tr("Saved") else tr("Changed"), undo, if (kind == "inc" && fillAfter && edit == null) t.amount else null)
@@ -574,6 +601,10 @@ private fun AddSheet(
                     runCatching { node.deleteTx(list.id, edit.id) }
                     onSaved(tr("Deleted"), { node.restoreTx(list.id, edit) }, null)
                 }, modifier = Modifier.testTag("addDelete")) { Text(tr("Delete"), color = MaterialTheme.colorScheme.error) }
+                if (rep != null) TextButton(onClick = {
+                    runCatching { node.deleteRepeating(list.id, rep.id, false) }
+                    onSaved(tr("Stopped repeating"), { node.deleteRepeating(list.id, rep.id, true) }, null)
+                }, modifier = Modifier.testTag("repStop")) { Text(tr("Stop repeating"), color = MaterialTheme.colorScheme.error) }
                 TextButton(onClick = onClose) { Text(tr("Cancel")) }
             }
         },
@@ -623,7 +654,7 @@ private fun AddSheet(
                     "inc" -> {
                         OutlinedTextField(payee, { payee = it }, singleLine = true, label = { Text(tr("From")) }, modifier = Modifier.fillMaxWidth().testTag("payee"))
                         AccountChips(b, tr("Into"), account, "acct") { account = it }
-                        if (edit == null) Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (edit == null && every.isEmpty()) Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(tr("Put it in envelopes now"), Modifier.weight(1f))
                             Switch(fillAfter, { fillAfter = it }, modifier = Modifier.testTag("fillAfter"))
                         }
@@ -656,6 +687,11 @@ private fun AddSheet(
                     OutlinedTextField(typed, { typed = it; if (runCatching { LocalDate.parse(it) }.isSuccess) date = it }, singleLine = true,
                         isError = runCatching { LocalDate.parse(typed) }.isFailure, label = { Text(tr("Date (year-month-day)")) }, modifier = Modifier.testTag("dateText"))
                 }
+                if (edit == null) FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (rep == null) FilterChip(every.isEmpty(), { every = "" }, label = { Text(tr("Once")) }, modifier = Modifier.testTag("every-once"))
+                    for ((k, l) in EVERY) FilterChip(every == k, { every = k }, label = { Text(tr(l)) }, modifier = Modifier.testTag("every-$k"))
+                }
+                if (rep != null) Text(tr("Changes apply from {date} on", "date" to dayLabel(rep.next)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 OutlinedTextField(note, { note = it }, singleLine = true, label = { Text(tr("Note")) }, modifier = Modifier.fillMaxWidth().testTag("note"))
             }
         },
@@ -682,7 +718,7 @@ private fun entryTitle(t: TxItem): String = when (t.kind) {
 // ---- Activity --------------------------------------------------------------------------------
 
 @Composable
-private fun ActivityView(b: BudgetView, activity: List<TxItem>, shared: Boolean, onOpen: (TxItem) -> Unit) {
+private fun ActivityView(b: BudgetView, activity: List<TxItem>, repeating: List<RepeatItem>, shared: Boolean, onOpen: (TxItem) -> Unit, onRepeat: (RepeatItem) -> Unit) {
     var query by remember { mutableStateOf("") }
     val q = query.trim()
     val shown = if (q.isEmpty()) activity else activity.filter { t ->
@@ -691,10 +727,28 @@ private fun ActivityView(b: BudgetView, activity: List<TxItem>, shared: Boolean,
     Column(Modifier.fillMaxSize()) {
         OutlinedTextField(query, { query = it }, singleLine = true, placeholder = { Text(tr("Search")) }, leadingIcon = { Icon(Ic.Search, null) },
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp).testTag("activitySearch"))
-        if (activity.isEmpty()) {
+        if (activity.isEmpty() && repeating.isEmpty()) {
             Text(tr("Nothing yet. What you spend and get shows up here."), color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(24.dp).testTag("activityEmpty"))
         }
         LazyColumn(Modifier.weight(1f)) {
+            if (q.isEmpty() && repeating.isNotEmpty()) {
+                item(key = "repeating") {
+                    Text(tr("Repeating"), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 2.dp))
+                }
+                items(repeating, key = { "r-" + it.id }) { r ->
+                    Row(Modifier.fillMaxWidth().clickable { onRepeat(r) }.padding(horizontal = 16.dp, vertical = 8.dp).testTag("rep-" + entryTitle(r.tx)), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Ic.Repeat, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(entryTitle(r.tx), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(tr(EVERY.firstOrNull { it.first == r.every }?.second ?: "") + " · " + tr("next {date}", "date" to dayLabel(r.next)),
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag("repNext"))
+                        }
+                        Text(money(if (r.tx.kind == "exp") -r.tx.amount else r.tx.amount, b.currency, sign = r.tx.kind == "inc"),
+                            color = if (r.tx.kind == "inc") gainColor() else MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
             for ((d, day) in shown.groupBy { it.date }) {
                 item(key = "d-$d") {
                     Text(dayLabel(d), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 2.dp))

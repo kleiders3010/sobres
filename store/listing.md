@@ -17,6 +17,7 @@ you spend in a few taps, and everyone in the budget sees the same balances on th
 • Available: what your accounts hold that has no job yet; Fill gives it jobs in one step
 • Spent: amount, what for, envelope. Earlier payees are suggested; split one purchase over several envelopes
 • Got money, move between envelopes, transfer between accounts
+• Rent, pay and bills can repeat every week, month or year and enter themselves
 • On track or behind: each envelope tells you how the month is going
 • Activity by day with who entered each entry; spending by envelope each month; CSV export
 • Share with a link, QR code or 8 words. Two people can spend at the same time, even offline: nothing is lost or
@@ -43,6 +44,7 @@ Gustos, un viaje), anotá lo que gastás en pocos toques, y todos en el presupue
 • Disponible: lo que tus cuentas tienen sin destino; Llenar lo reparte en un paso
 • Gasté: monto, en qué, sobre. Te sugiere lo que ya anotaste; dividí una compra en varios sobres
 • Recibí plata, mové entre sobres, transferí entre cuentas
+• El alquiler, el sueldo y las cuentas se pueden repetir cada semana, mes o año y se anotan solos
 • Vas bien o atrasado: cada sobre te dice cómo viene el mes
 • Movimientos por día con quién anotó cada uno; gastos por sobre cada mes; exportar CSV
 • Compartí con un enlace, un código QR u 8 palabras. Dos personas pueden gastar a la vez, incluso sin conexión: nada se

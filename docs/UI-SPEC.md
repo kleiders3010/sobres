@@ -74,5 +74,12 @@ Envelope / Sobre, Available / Disponible, Fill / Llenar, Spent / Gasté, Got mon
 Transfer / Transferir, Account / Cuenta. Never: sync, group, peer, relay, key, unallocated, ledger, debit.
 
 ## Out on purpose (first version)
-Bank connections (paid aggregators, bank passwords), loans/debt payoff plans, scheduled entries, reconcile,
+Bank connections (paid aggregators, bank passwords), loans/debt payoff plans, reconcile,
 weekly periods. Each is a later item if asked.
+
+## Repeating entries (added after the first look)
+Goodbudget's "Schedule this…": any entry in the Add sheet can repeat (Once / Every week / Every 2 weeks / Every month /
+Every year; its date is the first date). Due dates post themselves when a budget is open, on any device: each date's
+entry has an id made from the repeat and the date, so two phones posting it offline make one entry, and one someone
+deleted stays deleted. Activity lists "Repeating" on top with the next date; tapping one changes the dates still to
+come or stops it ("Stop repeating"; Undo).

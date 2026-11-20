@@ -96,6 +96,38 @@ pub struct PayeeItem {
     pub times: u32,
 }
 
+/// A repeating entry: what it posts (`tx.date` = its first date; `tx.id` = the repeat's id) and
+/// the next date it will post.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct RepeatItem {
+    pub id: String,
+    /// "w" weekly, "2w" every two weeks, "m" monthly, "y" yearly.
+    pub every: String,
+    pub next: String,
+    pub tx: TxItem,
+}
+
+type Names = std::collections::BTreeMap<String, String>;
+
+fn item(t: b::Tx, envs: &Names, accts: &Names) -> TxItem {
+    let name = |m: &Names, k: &str| m.get(k).cloned().unwrap_or_default();
+    TxItem {
+        account_name: name(accts, &t.account),
+        to_name: name(accts, &t.to),
+        parts: t.parts.iter().map(|(e, c)| PartItem { envelope_name: name(envs, e), envelope_id: e.clone(), cents: *c }).collect(),
+        id: t.id,
+        kind: t.kind,
+        date: t.date,
+        amount: t.amount,
+        account_id: t.account,
+        to_id: t.to,
+        payee: t.payee,
+        note: t.note,
+        by: t.by,
+        at_ms: t.at,
+    }
+}
+
 fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
@@ -148,25 +180,7 @@ impl KtNode {
         self.app
             .read(&l, |d| {
                 let (envs, accts) = (b::envelope_names(d), b::account_names(d));
-                let name = |m: &std::collections::BTreeMap<String, String>, k: &str| m.get(k).cloned().unwrap_or_default();
-                b::transactions(d)
-                    .into_iter()
-                    .map(|t| TxItem {
-                        account_name: name(&accts, &t.account),
-                        to_name: name(&accts, &t.to),
-                        parts: t.parts.iter().map(|(e, c)| PartItem { envelope_name: name(&envs, e), envelope_id: e.clone(), cents: *c }).collect(),
-                        id: t.id,
-                        kind: t.kind,
-                        date: t.date,
-                        amount: t.amount,
-                        account_id: t.account,
-                        to_id: t.to,
-                        payee: t.payee,
-                        note: t.note,
-                        by: t.by,
-                        at_ms: t.at,
-                    })
-                    .collect()
+                b::transactions(d).into_iter().map(|t| item(t, &envs, &accts)).collect()
             })
             .map_err(fail)
     }
@@ -323,5 +337,50 @@ impl KtNode {
             }
         }
         Ok(out)
+    }
+    pub fn repeating(&self, list_id: String) -> Result<Vec<RepeatItem>, KtError> {
+        let l = self.list(&list_id)?;
+        self.app
+            .read(&l, |d| {
+                let (envs, accts) = (b::envelope_names(d), b::account_names(d));
+                b::repeats(d).into_iter().map(|r| RepeatItem { id: r.id, every: r.every, next: r.next, tx: item(r.tx, &envs, &accts) }).collect()
+            })
+            .map_err(fail)
+    }
+
+    /// Start (`repeat_id` None) or change a repeating entry; `tx.date` is its first date. Call
+    /// [`Self::post_due`] after it to post what is due.
+    pub fn set_repeating(&self, list_id: String, repeat_id: Option<String>, every: String, tx: TxEdit) -> Result<String, KtError> {
+        let l = self.list(&list_id)?;
+        let by = self.app.display_name();
+        let id = self.app.edit(&l, |d| b::set_repeat(d, repeat_id.as_deref(), &every, &input(&tx), &by)).map_err(fail)?;
+        self.notify();
+        Ok(id)
+    }
+
+    /// Stop a repeating entry (what it posted stays); `undo` starts it again.
+    pub fn delete_repeating(&self, list_id: String, repeat_id: String, undo: bool) -> Result<(), KtError> {
+        let l = self.list(&list_id)?;
+        self.app.edit(&l, |d| b::delete_repeat(d, &repeat_id, now_ms(), undo)).map_err(fail)?;
+        self.notify();
+        Ok(())
+    }
+
+    /// Post what repeating entries have due up to `today`; returns the new entries' ids (empty =
+    /// nothing changed, and nothing was written).
+    pub fn post_due(&self, list_id: String, today: String) -> Result<Vec<String>, KtError> {
+        let l = self.list(&list_id)?;
+        let due = self
+            .app
+            .read(&l, |d| b::repeats(d).iter().any(|r| r.next.as_str() <= today.as_str()))
+            .map_err(fail)?;
+        if !due {
+            return Ok(Vec::new());
+        }
+        let ids = self.app.edit(&l, |d| b::post_due(d, &today, now_ms())).map_err(fail)?;
+        if !ids.is_empty() {
+            self.notify();
+        }
+        Ok(ids)
     }
 }

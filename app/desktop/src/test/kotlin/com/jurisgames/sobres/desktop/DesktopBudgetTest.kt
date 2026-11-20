@@ -12,6 +12,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import com.jurisgames.sobres.core.KtNode
 import com.jurisgames.sobres.core.NodeOptions
 import com.jurisgames.sobres.core.PartItem
@@ -253,5 +254,62 @@ class DesktopBudgetTest {
         } finally {
             com.jurisgames.sobres.ui.Lang.spanish = false
         }
+    }
+
+    @Test
+    fun repeatingEntries() {
+        // pinned: every due date posts exactly one entry (counts follow the dates; amounts are the ones typed here)
+        val n = node()
+        val list = n.createList(null, "Home")
+        val bank = n.setAccount(list.id, null, "Bank", "bank", 500_000)
+        val rent = n.setEnvelope(list.id, null, "Rent", 90_000, "m", null, "")
+        // Pay that started two weeks ago, every week: posted when the budget opens (3 dates, once each).
+        val start = java.time.LocalDate.now().minusDays(14).toString()
+        n.setRepeating(list.id, null, "w", TxEdit("inc", start, 40_000, bank, "", "Pay", "", emptyList()))
+        rule.setContent { SobresApp(n) }
+        waitFor("env-Rent")
+        rule.waitUntil(5_000) { n.budgetActivity(list.id).count { it.payee == "Pay" } == 3 }
+        rule.waitForIdle()
+        check(n.budgetActivity(list.id).count { it.payee == "Pay" } == 3) { "nothing posted twice" }
+
+        // Spent… with Every month, starting two months ago: three months of rent at once.
+        rule.onNodeWithTag("addSpent").performClick()
+        waitFor("amount")
+        rule.onNodeWithTag("amount").performTextInput("900")
+        rule.onNodeWithTag("payee").performTextInput("Rent")
+        rule.onNodeWithTag("envChip-Rent").performClick()
+        rule.onNodeWithTag("datePick").performClick()
+        waitFor("dateText")
+        rule.onNodeWithTag("dateText").performTextReplacement(java.time.LocalDate.now().minusMonths(2).toString())
+        rule.onNodeWithTag("every-m").performClick()
+        shot("7-repeat")
+        rule.onNodeWithTag("addSave").performClick()
+        gone("addSave")
+        check(n.budgetActivity(list.id).count { it.payee == "Rent" } == 3)
+        val r = n.repeating(list.id).first { it.tx.payee == "Rent" }
+        check(r.every == "m" && r.next > today()) { r.toString() }
+        check(n.budget(list.id, today()).envelopes.first { it.id == rent }.balance == -270_000L)
+
+        // Activity lists what repeats; changing it applies to the dates still to come.
+        rule.onNodeWithTag("secActivity").performClick()
+        waitFor("rep-Rent")
+        check(shown("rep-Pay"))
+        shot("8-repeating")
+        rule.onNodeWithTag("rep-Rent").performClick()
+        waitFor("repStop")
+        rule.onNodeWithTag("amount").performTextReplacement("950")
+        rule.onNodeWithTag("addSave").performClick()
+        gone("addSave")
+        check(n.repeating(list.id).first { it.id == r.id }.tx.amount == 95_000L)
+        check(n.budgetActivity(list.id).filter { it.payee == "Rent" }.all { it.amount == 90_000L }) { "posted entries keep their amount" }
+
+        // Stop repeating: it leaves the list; what it posted stays.
+        rule.onNodeWithTag("rep-Rent").performClick()
+        waitFor("repStop")
+        rule.onNodeWithTag("repStop").performClick()
+        gone("repStop")
+        check(n.repeating(list.id).none { it.id == r.id })
+        check(n.budgetActivity(list.id).count { it.payee == "Rent" } == 3)
+        gone("rep-Rent")
     }
 }

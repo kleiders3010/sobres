@@ -12,6 +12,8 @@ holding your money data.
   envelope's monthly amount, or just a top-up to it, or any amount you type.
 - **Spent… in seconds:** amount, what for (earlier payees are suggested and pick their envelope and account), the
   envelope with what's left in it, the account. Split one purchase over several envelopes; refunds; Undo.
+- **Repeating:** rent, pay, bills: any entry can come back every week, two weeks, month or year and enters
+  itself on its day (once, even when two phones are offline).
 - **Got money, Move, Transfer:** income into an account (and straight into envelopes if you like), money moved
   between envelopes, transfers between accounts (paying a card is one).
 - **Activity and Month:** every entry by day, searchable, with who entered it in a shared budget; spending by
@@ -24,7 +26,7 @@ holding your money data.
 - English and Spanish.
 
 Not in this first version: bank connections (they need paid aggregators and your bank password), debt payoff plans,
-scheduled entries, reconciling against a statement.
+reconciling against a statement.
 
 ## Download
 - Android: [Google Play](https://play.google.com/store/apps/details?id=com.jurisgames.sobres) or the APK on the

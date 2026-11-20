@@ -10,6 +10,7 @@
 //! - `tx`: transaction id → map { `k` kind, `d` date "YYYY-MM-DD", `amt` cents, `acct`, `to`
 //!   (account, for a transfer), `payee`, `note`, `by` (who entered it), `at` (ms), `p` (map
 //!   envelope id → cents) }
+//! - `rep`: repeating entries (see "repeating entries" below)
 //!
 //! Kinds: `exp` an expense (amt leaves `acct`; each part leaves its envelope; a negative amount is a
 //! refund), `inc` income (amt enters `acct` and Available), `fill` (each part moves from Available
@@ -622,6 +623,234 @@ pub fn days_in_month(y: i64, m: i64) -> i64 {
     }
 }
 
+// ---------- repeating entries ----------
+//
+// `rep`: repeat id → map { the fields of a transaction (`k`, `d` = first date, `amt`, `acct`, `to`,
+// `payee`, `note`, `p`), `every` ("w", "2w", "m", "y"), `by`, `gone`, `done` (map date → 1: the
+// dates already posted or passed over) }. Each due date becomes a transaction whose id is made from
+// the repeat's id and the date, so two devices posting the same date at once write the same entry
+// (one, not two), and a posted entry someone deleted stays deleted (its date is in `done`).
+
+pub const EVERY: [&str; 4] = ["w", "2w", "m", "y"];
+/// At most this many entries are posted in one go (a repeat started long ago catches up over calls).
+pub const MAX_POST: usize = 400;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Repeat {
+    pub id: String,
+    pub every: String,
+    /// The entry as a template; its `date` is the first date.
+    pub tx: Tx,
+    /// The next date not posted yet.
+    pub next: String,
+}
+
+fn civil_days(d: &str) -> Option<i64> {
+    let (y, m) = ym(d)?;
+    let day: i64 = d.get(8..10)?.parse().ok()?;
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146_097 + doe)
+}
+
+fn civil_date(z: i64) -> String {
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// The `n`-th date (0 = `start`) of a repeat. A monthly one on the 31st falls on the last day of
+/// shorter months and comes back to the 31st after them.
+pub fn occurrence(start: &str, every: &str, n: i64) -> Option<String> {
+    let (y, m) = ym(start)?;
+    let day: i64 = start.get(8..10)?.parse().ok()?;
+    let months = |k: i64| {
+        let t = y * 12 + (m - 1) + k;
+        let (ny, nm) = (t.div_euclid(12), t.rem_euclid(12) + 1);
+        format!("{ny:04}-{nm:02}-{:02}", day.min(days_in_month(ny, nm)))
+    };
+    match every {
+        "w" => Some(civil_date(civil_days(start)? + 7 * n)),
+        "2w" => Some(civil_date(civil_days(start)? + 14 * n)),
+        "m" => Some(months(n)),
+        "y" => Some(months(12 * n)),
+        _ => None,
+    }
+}
+
+fn done_dates(m: &LoroMap) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    if let Some(ValueOrContainer::Container(loro::Container::Map(dm))) = m.get("done") {
+        dm.for_each(|k, _| {
+            out.insert(k.to_string());
+        });
+    }
+    out
+}
+
+fn template(id: &str, m: &LoroMap) -> Tx {
+    Tx {
+        id: id.to_string(),
+        kind: s(m, "k"),
+        date: s(m, "d"),
+        amount: i(m, "amt"),
+        account: s(m, "acct"),
+        to: s(m, "to"),
+        payee: s(m, "payee"),
+        note: s(m, "note"),
+        by: s(m, "by"),
+        at: 0,
+        parts: transactions_one(m),
+    }
+}
+
+/// The first date of a repeat that is not posted yet (dates before `from` are skipped over).
+fn next_open(start: &str, every: &str, done: &std::collections::BTreeSet<String>) -> Option<(i64, String)> {
+    let mut n = 0;
+    loop {
+        let d = occurrence(start, every, n)?;
+        if !done.contains(&d) {
+            return Some((n, d));
+        }
+        n += 1;
+        if n > 100_000 {
+            return None;
+        }
+    }
+}
+
+/// The repeats that still run, soonest first.
+pub fn repeats(doc: &LoroDoc) -> Vec<Repeat> {
+    let mut out: Vec<Repeat> = entries(doc, "rep")
+        .into_iter()
+        .filter(|(_, m)| i(m, "gone") == 0)
+        .filter_map(|(id, m)| {
+            let every = s(&m, "every");
+            let tx = template(&id, &m);
+            if !EVERY.contains(&every.as_str()) || !KINDS_TX.contains(&tx.kind.as_str()) || !valid_date(&tx.date) {
+                return None; // a newer version's kind of repeat
+            }
+            let (_, next) = next_open(&tx.date, &every, &done_dates(&m))?;
+            Some(Repeat { id, every, tx, next })
+        })
+        .collect();
+    out.sort_by(|a, b| (&a.next, &a.id).cmp(&(&b.next, &b.id)));
+    out
+}
+
+/// Start (id None) or change a repeat. A change applies to the dates not posted yet; entries
+/// already posted stay as they are (each can be changed on its own).
+pub fn set_repeat(doc: &LoroDoc, id: Option<&str>, every: &str, t: &TxInput, by: &str) -> Result<String> {
+    if !EVERY.contains(&every) {
+        return Err(Error::Invalid("every".into()));
+    }
+    validate(doc, t)?;
+    let (id, m) = match id {
+        Some(id) => (id.to_string(), child(doc, "rep", id).ok_or(Error::NotFound)?),
+        None => {
+            let id = new_id();
+            let m = doc.get_map("rep").insert_container(&id, LoroMap::new()).map_err(loro)?;
+            m.insert("by", clip(by).as_str()).map_err(loro)?;
+            m.insert_container("done", LoroMap::new()).map_err(loro)?;
+            (id, m)
+        }
+    };
+    let text = [("every", every.to_string()), ("k", t.kind.clone()), ("d", t.date.clone()), ("acct", t.account.clone()), ("to", t.to.clone()), ("payee", clip(&t.payee)), ("note", clip(&t.note))];
+    for (k, v) in text {
+        if s(&m, k) != v {
+            m.insert(k, v.as_str()).map_err(loro)?;
+        }
+    }
+    if i(&m, "amt") != t.amount || m.get("amt").is_none() {
+        m.insert("amt", t.amount).map_err(loro)?;
+    }
+    let mut want: Vec<(String, i64)> = t.parts.iter().filter(|p| p.1 != 0).cloned().collect();
+    want.sort();
+    if transactions_one(&m) != want || m.get("p").is_none() {
+        let p = m.insert_container("p", LoroMap::new()).map_err(loro)?;
+        for (e, c) in &want {
+            p.insert(e, *c).map_err(loro)?;
+        }
+    }
+    doc.commit();
+    Ok(id)
+}
+
+/// Stop a repeat (entries already posted stay); `undo` starts it again.
+pub fn delete_repeat(doc: &LoroDoc, id: &str, now_ms: u64, undo: bool) -> Result<()> {
+    let m = child(doc, "rep", id).ok_or(Error::NotFound)?;
+    m.insert("gone", if undo { 0 } else { now_ms.max(1) as i64 }).map_err(loro)?;
+    doc.commit();
+    Ok(())
+}
+
+/// The id of the entry a repeat posts on `date`.
+pub fn repeat_tx_id(rep: &str, date: &str) -> String {
+    format!("{rep}.{date}")
+}
+
+/// Post every repeat's dates up to `today` that are not posted yet. Returns the new entries' ids.
+/// A date whose entry no longer fits the budget (its envelope or account was deleted for good) is
+/// passed over, not retried.
+pub fn post_due(doc: &LoroDoc, today: &str, now_ms: u64) -> Result<Vec<String>> {
+    if !valid_date(today) {
+        return Err(Error::Invalid("date".into()));
+    }
+    let mut posted = Vec::new();
+    for r in repeats(doc) {
+        let Some(m) = child(doc, "rep", &r.id) else { continue };
+        let done = match m.get("done") {
+            Some(ValueOrContainer::Container(loro::Container::Map(dm))) => dm,
+            _ => m.insert_container("done", LoroMap::new()).map_err(loro)?,
+        };
+        let have = done_dates(&m);
+        let Some((mut n, _)) = next_open(&r.tx.date, &r.every, &have) else { continue };
+        while posted.len() < MAX_POST {
+            let Some(d) = occurrence(&r.tx.date, &r.every, n) else { break };
+            if d.as_str() > today {
+                break;
+            }
+            n += 1;
+            if have.contains(&d) {
+                continue;
+            }
+            done.insert(&d, 1i64).map_err(loro)?;
+            let t = TxInput {
+                kind: r.tx.kind.clone(),
+                date: d.clone(),
+                amount: r.tx.amount,
+                account: r.tx.account.clone(),
+                to: r.tx.to.clone(),
+                payee: r.tx.payee.clone(),
+                note: r.tx.note.clone(),
+                parts: r.tx.parts.clone(),
+            };
+            if validate(doc, &t).is_err() {
+                continue;
+            }
+            let tid = repeat_tx_id(&r.id, &d);
+            let tm = doc.get_map("tx").insert_container(&tid, LoroMap::new()).map_err(loro)?;
+            tm.insert("by", r.tx.by.as_str()).map_err(loro)?;
+            tm.insert("at", now_ms as i64).map_err(loro)?;
+            tm.insert("rep", r.id.as_str()).map_err(loro)?;
+            set_tx(doc, Some(&tid), &t, "", now_ms)?;
+            posted.push(tid);
+        }
+    }
+    doc.commit();
+    Ok(posted)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -750,5 +979,79 @@ mod tests {
         move_envelope(&d, &a, Some(&b)).unwrap();
         let names: Vec<String> = budget(&d, "2026-11-01").envelopes.into_iter().map(|e| e.name).collect();
         assert_eq!(names, ["C", "B", "A"]);
+    }
+
+    #[test]
+    fn repeat_dates() {
+        let o = |s: &str, e: &str, n: i64| occurrence(s, e, n).unwrap();
+        assert_eq!(o("2026-01-31", "m", 1), "2026-02-28");
+        assert_eq!(o("2026-01-31", "m", 2), "2026-03-31", "back to the 31st");
+        assert_eq!(o("2026-11-30", "w", 1), "2026-12-07");
+        assert_eq!(o("2026-12-25", "2w", 1), "2027-01-08");
+        assert_eq!(o("2028-02-29", "y", 1), "2029-02-28");
+        assert_eq!(o("2026-11-05", "m", -11), "2025-12-05");
+        for z in [-1000i64, 0, 20_000, 738_000] {
+            assert_eq!(civil_days(&civil_date(z)), Some(z));
+        }
+    }
+
+    #[test]
+    fn repeats_post_once_even_on_two_devices() {
+        let a = doc();
+        let bank = set_account(&a, None, "Bank", "bank", 100_000).unwrap();
+        let rent = set_envelope(&a, None, "Rent", 50_000, "m", None, "").unwrap();
+        let mut t = exp(&bank, &rent, 50_000);
+        t.date = "2026-09-01".into();
+        t.payee = "Rent".into();
+        let r = set_repeat(&a, None, "m", &t, "Ana").unwrap();
+        assert!(set_repeat(&a, None, "daily", &t, "Ana").is_err());
+        let b = LoroDoc::new();
+        b.import(&a.export(loro::ExportMode::Snapshot).unwrap()).unwrap();
+        // Both phones open the budget on Nov 10, offline: Sep, Oct, Nov are due on each.
+        assert_eq!(post_due(&a, "2026-11-10", 1).unwrap().len(), 3);
+        assert_eq!(post_due(&b, "2026-11-10", 2).unwrap().len(), 3);
+        assert!(post_due(&a, "2026-11-10", 3).unwrap().is_empty(), "nothing twice");
+        a.import(&b.export(loro::ExportMode::all_updates()).unwrap()).unwrap();
+        b.import(&a.export(loro::ExportMode::all_updates()).unwrap()).unwrap();
+        let rents = |d: &LoroDoc| transactions(d).into_iter().filter(|x| x.payee == "Rent").count();
+        assert_eq!((rents(&a), rents(&b)), (3, 3), "the same three entries, not six");
+        assert_eq!(budget(&a, "2026-11-10"), budget(&b, "2026-11-10"));
+        assert_eq!(transactions(&a)[0].by, "Ana");
+        // A posted entry someone deletes stays deleted; the next date still comes.
+        delete_tx(&a, &repeat_tx_id(&r, "2026-10-01")).unwrap();
+        assert!(post_due(&a, "2026-11-10", 4).unwrap().is_empty());
+        assert_eq!(repeats(&a)[0].next, "2026-12-01");
+        assert_eq!(post_due(&a, "2026-12-01", 5).unwrap(), vec![repeat_tx_id(&r, "2026-12-01")]);
+        // A change applies from the next date on; posted ones keep their amount.
+        t.amount = 55_000;
+        t.parts = vec![(rent.clone(), 55_000)];
+        set_repeat(&a, Some(&r), "m", &t, "Ana").unwrap();
+        post_due(&a, "2027-01-01", 6).unwrap();
+        let amounts: Vec<i64> = transactions(&a).into_iter().filter(|x| x.payee == "Rent").map(|x| x.amount).collect();
+        assert_eq!(amounts, [55_000, 50_000, 50_000, 50_000]);
+        // Stopped: nothing more; undo starts it again with the missed dates.
+        delete_repeat(&a, &r, 7, false).unwrap();
+        assert!(repeats(&a).is_empty());
+        assert!(post_due(&a, "2027-03-01", 8).unwrap().is_empty());
+        delete_repeat(&a, &r, 9, true).unwrap();
+        assert_eq!(post_due(&a, "2027-03-01", 10).unwrap().len(), 2);
+        // Survives an epoch rebuild.
+        let fresh = crate::rebuild(&a, 99).unwrap();
+        assert_eq!(repeats(&fresh), repeats(&a));
+        assert!(post_due(&fresh, "2027-03-01", 11).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_repeat_whose_envelope_is_gone_passes_over() {
+        let d = doc();
+        let bank = set_account(&d, None, "Bank", "bank", 0).unwrap();
+        let fun = set_envelope(&d, None, "Fun", 1000, "m", None, "").unwrap();
+        let mut t = exp(&bank, &fun, 100);
+        t.date = "2026-11-01".into();
+        set_repeat(&d, None, "w", &t, "A").unwrap();
+        assert_eq!(post_due(&d, "2026-11-20", 1).unwrap().len(), 3);
+        d.get_map("env").delete(&fun).unwrap();
+        assert!(post_due(&d, "2026-11-30", 2).unwrap().is_empty());
+        assert_eq!(repeats(&d)[0].next, "2026-12-06", "passed over, not retried");
     }
 }
