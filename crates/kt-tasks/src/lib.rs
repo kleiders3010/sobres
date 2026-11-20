@@ -19,6 +19,7 @@
 use std::collections::BTreeMap;
 
 pub mod app;
+pub mod budget;
 pub mod appearance;
 pub mod export;
 pub mod history;

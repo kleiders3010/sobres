@@ -31,6 +31,7 @@ uniffi::setup_scaffolding!();
 #[cfg(target_os = "android")]
 mod android;
 mod vault;
+mod budget;
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum KtError {
