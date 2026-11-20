@@ -31,6 +31,11 @@ pub struct AccountItem {
     pub kind: String,
     pub start: i64,
     pub balance: i64,
+    /// Opening balance plus the cleared and reconciled entries.
+    pub cleared: i64,
+    /// Last finished reconcile ("" = never) and the statement balance it ended at.
+    pub rec_date: String,
+    pub rec_balance: i64,
 }
 
 #[derive(Clone, Debug, uniffi::Record)]
@@ -66,6 +71,8 @@ pub struct TxItem {
     pub by: String,
     pub at_ms: u64,
     pub parts: Vec<PartItem>,
+    /// 0 not cleared, 1 cleared (seen at the bank), 2 reconciled.
+    pub status: i64,
 }
 
 #[derive(Clone, Debug, uniffi::Record)]
@@ -125,6 +132,7 @@ fn item(t: b::Tx, envs: &Names, accts: &Names) -> TxItem {
         note: t.note,
         by: t.by,
         at_ms: t.at,
+        status: t.status,
     }
 }
 
@@ -167,7 +175,16 @@ impl KtNode {
                     spent_month: e.spent_month,
                 })
                 .collect(),
-            accounts: v.accounts.iter().map(|a| AccountItem { id: a.id.clone(), name: a.name.clone(), kind: a.kind.clone(), start: a.start, balance: a.balance }).collect(),
+            accounts: v.accounts.iter().map(|a| AccountItem {
+                    id: a.id.clone(),
+                    name: a.name.clone(),
+                    kind: a.kind.clone(),
+                    start: a.start,
+                    balance: a.balance,
+                    cleared: a.cleared,
+                    rec_date: a.rec_date.clone(),
+                    rec_balance: a.rec_balance,
+                }).collect(),
             name: v.name,
             currency: v.currency,
             available: v.available,
@@ -216,10 +233,28 @@ impl KtNode {
             by: tx.by,
             at: tx.at_ms,
             parts: tx.parts.into_iter().map(|p| (p.envelope_id, p.cents)).collect(),
+            status: tx.status,
         };
         self.app.edit(&l, |d| b::restore_tx(d, &t)).map_err(fail)?;
         self.notify();
         Ok(())
+    }
+
+    /// Mark an entry as seen at the bank, or not.
+    pub fn set_cleared(&self, list_id: String, tx_id: String, cleared: bool) -> Result<(), KtError> {
+        let l = self.list(&list_id)?;
+        self.app.edit(&l, |d| b::set_cleared(d, &tx_id, cleared)).map_err(fail)?;
+        self.notify();
+        Ok(())
+    }
+
+    /// Finish reconciling an account against a statement (refused unless the cleared balance equals
+    /// `statement`). Returns how many entries became reconciled.
+    pub fn finish_reconcile(&self, list_id: String, account_id: String, date: String, statement: i64) -> Result<u32, KtError> {
+        let l = self.list(&list_id)?;
+        let n = self.app.edit(&l, |d| b::finish_reconcile(d, &account_id, &date, statement)).map_err(fail)?;
+        self.notify();
+        Ok(n as u32)
     }
 
     pub fn set_envelope(&self, list_id: String, envelope_id: Option<String>, name: String, amount: i64, kind: String, due: Option<String>, group: String) -> Result<String, KtError> {
@@ -313,7 +348,7 @@ impl KtNode {
             .map_err(fail)
     }
 
-    /// The activity as CSV (date, kind, payee, envelope, account, amount, note, by): one line per
+    /// The activity as CSV (date, kind, payee, envelope, account, amount, note, by, status): one line per
     /// envelope part, so a split shows as several lines.
     pub fn export_csv(&self, list_id: String) -> Result<String, KtError> {
         let rows = self.budget_activity(list_id)?;
@@ -323,7 +358,7 @@ impl KtNode {
             format!("\"{}\"", s.replace('"', "\"\""))
         }
         let money = |c: i64| format!("{}{}.{:02}", if c < 0 { "-" } else { "" }, c.abs() / 100, c.abs() % 100);
-        let mut out = String::from("date,kind,payee,envelope,account,amount,note,by\n");
+        let mut out = String::from("date,kind,payee,envelope,account,amount,note,by,status\n");
         for t in rows {
             let account = if t.kind == "xfer" { format!("{} > {}", t.account_name, t.to_name) } else { t.account_name.clone() };
             let lines: Vec<(String, i64)> = match t.kind.as_str() {
@@ -331,8 +366,13 @@ impl KtNode {
                 "fill" => t.parts.iter().map(|p| (p.envelope_name.clone(), p.cents)).collect(),
                 _ => vec![(String::new(), t.amount)],
             };
+            let status = match t.status {
+                b::CLEARED => "cleared",
+                b::RECONCILED => "reconciled",
+                _ => "",
+            };
             for (env, c) in lines {
-                out.push_str(&[q(&t.date), q(&t.kind), q(&t.payee), q(&env), q(&account), q(&money(c)), q(&t.note), q(&t.by)].join(","));
+                out.push_str(&[q(&t.date), q(&t.kind), q(&t.payee), q(&env), q(&account), q(&money(c)), q(&t.note), q(&t.by), q(status)].join(","));
                 out.push('\n');
             }
         }

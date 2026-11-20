@@ -1,6 +1,7 @@
 package com.jurisgames.sobres.desktop
 
 import androidx.compose.ui.graphics.toAwtImage
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasTestTag
@@ -311,5 +312,58 @@ class DesktopBudgetTest {
         check(n.repeating(list.id).none { it.id == r.id })
         check(n.budgetActivity(list.id).count { it.payee == "Rent" } == 3)
         gone("rep-Rent")
+    }
+
+    @Test
+    fun reconcileAgainstAStatement() {
+        // pinned: Finish only when the cleared balance equals the statement; ticked entries become reconciled
+        val n = node()
+        val list = n.createList(null, "Home")
+        val bank = n.setAccount(list.id, null, "Bank", "bank", 100_000)
+        val food = n.setEnvelope(list.id, null, "Food", 40_000, "m", null, "")
+        val d = today()
+        n.setTx(list.id, null, TxEdit("exp", d, 2_000, bank, "", "Coffee", "", listOf(PartItem(food, "", 2_000))))
+        n.setTx(list.id, null, TxEdit("exp", d, 3_000, bank, "", "Shop", "", listOf(PartItem(food, "", 3_000))))
+        rule.setContent { SobresApp(n) }
+        waitFor("env-Food")
+        rule.onNodeWithTag("secAccounts").performClick()
+        waitFor("acct-Bank")
+        rule.onNodeWithTag("acct-Bank").performClick()
+        waitFor("reconcileOpen")
+        rule.onNodeWithTag("reconcileOpen").performClick()
+        waitFor("recStatement")
+        rule.onNodeWithTag("recStatement").performTextInput("980")
+        rule.waitForIdle()
+        rule.onNodeWithTag("recFinish").assertIsNotEnabled()
+        rule.onNodeWithTag("rec-Coffee").performClick()
+        rule.waitUntil(5_000) { n.budget(list.id, d).accounts.first().cleared == 98_000L }
+        rule.waitForIdle()
+        rule.onNodeWithTag("recFinish").assertIsEnabled()
+        shot("9-reconcile")
+        rule.onNodeWithTag("recFinish").performClick()
+        gone("recFinish")
+        val st = { p: String -> n.budgetActivity(list.id).first { it.payee == p }.status }
+        check(st("Coffee") == 2L && st("Shop") == 0L) { "Coffee ${st("Coffee")} Shop ${st("Shop")}" }
+        check(n.budget(list.id, d).accounts.first().recDate == d)
+
+        // Again: the reconciled one is no longer listed; a missing entry can be added from here.
+        rule.onNodeWithTag("acct-Bank").performClick()
+        waitFor("reconcileOpen")
+        rule.onNodeWithTag("reconcileOpen").performClick()
+        waitFor("recLast")
+        check(!shown("rec-Coffee") && shown("rec-Shop"))
+        rule.onNodeWithTag("recAdd").performClick()
+        waitFor("amount")
+        rule.onNodeWithTag("amount").performTextInput("1.50")
+        rule.onNodeWithTag("payee").performTextInput("Fee")
+        rule.onNodeWithTag("envChip-Food").performClick()
+        rule.onNodeWithTag("addSave").performClick()
+        gone("addSave")
+        waitFor("rec-Fee")
+        check(n.budgetActivity(list.id).first { it.payee == "Fee" }.accountId == bank)
+        rule.onNodeWithTag("recLater").performClick()
+        gone("recLater")
+        rule.onNodeWithTag("secActivity").performClick()
+        waitFor("status-2")
     }
 }

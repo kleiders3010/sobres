@@ -14,6 +14,8 @@ holding your money data.
   envelope with what's left in it, the account. Split one purchase over several envelopes; refunds; Undo.
 - **Repeating:** rent, pay, bills: any entry can come back every week, two weeks, month or year and enters
   itself on its day (once, even when two phones are offline).
+- **Reconcile:** tick off each entry your bank statement shows; when the cleared balance matches the statement,
+  Finish marks them reconciled.
 - **Got money, Move, Transfer:** income into an account (and straight into envelopes if you like), money moved
   between envelopes, transfers between accounts (paying a card is one).
 - **Activity and Month:** every entry by day, searchable, with who entered it in a shared budget; spending by
@@ -25,8 +27,7 @@ holding your money data.
   mailbox. Every layer only ever sees encrypted data (CRDTs, [Loro](https://loro.dev)).
 - English and Spanish.
 
-Not in this first version: bank connections (they need paid aggregators and your bank password), debt payoff plans,
-reconciling against a statement.
+Not in this first version: bank connections (they need paid aggregators and your bank password), debt payoff plans.
 
 ## Download
 - Android: [Google Play](https://play.google.com/store/apps/details?id=com.jurisgames.sobres) or the APK on the

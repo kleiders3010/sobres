@@ -9,7 +9,8 @@
 //!   balance in cents; a card's is minus what is owed), `order`, `gone` }
 //! - `tx`: transaction id → map { `k` kind, `d` date "YYYY-MM-DD", `amt` cents, `acct`, `to`
 //!   (account, for a transfer), `payee`, `note`, `by` (who entered it), `at` (ms), `p` (map
-//!   envelope id → cents) }
+//!   envelope id → cents), `clr` (0 not cleared, 1 cleared = seen at the bank, 2 reconciled) }
+//! - an account's last finished reconcile: `rd` (statement date) and `rbal` (its ending balance)
 //! - `rep`: repeating entries (see "repeating entries" below)
 //!
 //! Kinds: `exp` an expense (amt leaves `acct`; each part leaves its envelope; a negative amount is a
@@ -59,6 +60,11 @@ pub struct Account {
     pub start: i64,
     pub order: f64,
     pub balance: i64,
+    /// Opening balance plus the entries marked cleared or reconciled (what the bank should show).
+    pub cleared: i64,
+    /// Last finished reconcile: statement date ("" = never) and its ending balance.
+    pub rec_date: String,
+    pub rec_balance: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -75,7 +81,13 @@ pub struct Tx {
     pub at: u64,
     /// (envelope id, cents), sorted by envelope id.
     pub parts: Vec<(String, i64)>,
+    /// [`NOT_CLEARED`], [`CLEARED`] (seen at the bank) or [`RECONCILED`] (part of a finished statement).
+    pub status: i64,
 }
+
+pub const NOT_CLEARED: i64 = 0;
+pub const CLEARED: i64 = 1;
+pub const RECONCILED: i64 = 2;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Budget {
@@ -191,6 +203,7 @@ pub fn transactions(doc: &LoroDoc) -> Vec<Tx> {
                 by: s(&m, "by"),
                 at: i(&m, "at").max(0) as u64,
                 parts,
+                status: i(&m, "clr").clamp(NOT_CLEARED, RECONCILED),
             })
         })
         .collect();
@@ -236,7 +249,14 @@ pub fn budget(doc: &LoroDoc, today: &str) -> Budget {
     let mut env_bal: BTreeMap<&str, i64> = BTreeMap::new();
     let mut env_spent: BTreeMap<&str, i64> = BTreeMap::new();
     let mut acct_bal: BTreeMap<&str, i64> = BTreeMap::new();
+    let mut acct_clr: BTreeMap<&str, i64> = BTreeMap::new();
     for t in &txs {
+        if t.status != NOT_CLEARED {
+            *acct_clr.entry(&t.account).or_default() += effect(t, &t.account);
+            if t.kind == "xfer" {
+                *acct_clr.entry(&t.to).or_default() += effect(t, &t.to);
+            }
+        }
         match t.kind.as_str() {
             "exp" => {
                 *acct_bal.entry(&t.account).or_default() -= t.amount;
@@ -288,7 +308,17 @@ pub fn budget(doc: &LoroDoc, today: &str) -> Budget {
             let kind = s(&m, "kind");
             let kind = if KINDS_ACCT.contains(&kind.as_str()) { kind } else { "bank".to_string() };
             let start = i(&m, "start");
-            Account { balance: start + acct_bal.get(id.as_str()).copied().unwrap_or(0), name: s(&m, "name"), order: f(&m, "order"), kind, start, id }
+            Account {
+                balance: start + acct_bal.get(id.as_str()).copied().unwrap_or(0),
+                cleared: start + acct_clr.get(id.as_str()).copied().unwrap_or(0),
+                rec_date: Some(s(&m, "rd")).filter(|d| valid_date(d)).unwrap_or_default(),
+                rec_balance: i(&m, "rbal"),
+                name: s(&m, "name"),
+                order: f(&m, "order"),
+                kind,
+                start,
+                id,
+            }
         })
         .collect();
     accounts.sort_by(|a, b| a.order.total_cmp(&b.order).then(a.id.cmp(&b.id)));
@@ -522,6 +552,10 @@ pub fn set_tx(doc: &LoroDoc, id: Option<&str>, t: &TxInput, by: &str, now_ms: u6
             (id, m)
         }
     };
+    // Changing the amount, kind or accounts of a cleared entry means it no longer matches the bank.
+    if i(&m, "clr") != NOT_CLEARED && (s(&m, "k") != t.kind || i(&m, "amt") != t.amount || s(&m, "acct") != t.account || s(&m, "to") != t.to) {
+        m.insert("clr", NOT_CLEARED).map_err(loro)?;
+    }
     let text = [("k", t.kind.clone()), ("d", t.date.clone()), ("acct", t.account.clone()), ("to", t.to.clone()), ("payee", clip(&t.payee)), ("note", clip(&t.note))];
     for (k, v) in text {
         if s(&m, k) != v {
@@ -576,6 +610,9 @@ pub fn restore_tx(doc: &LoroDoc, t: &Tx) -> Result<()> {
     }
     m.insert("amt", t.amount).map_err(loro)?;
     m.insert("at", t.at as i64).map_err(loro)?;
+    if t.status != NOT_CLEARED {
+        m.insert("clr", t.status).map_err(loro)?;
+    }
     let p = m.insert_container("p", LoroMap::new()).map_err(loro)?;
     for (e, c) in &t.parts {
         p.insert(e, *c).map_err(loro)?;
@@ -621,6 +658,59 @@ pub fn days_in_month(y: i64, m: i64) -> i64 {
         _ if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 => 29,
         _ => 28,
     }
+}
+
+// ---------- reconcile ----------
+
+/// What an entry does to an account's balance (0 when it doesn't touch it).
+pub fn effect(t: &Tx, account: &str) -> i64 {
+    match t.kind.as_str() {
+        "exp" if t.account == account => -t.amount,
+        "inc" if t.account == account => t.amount,
+        "xfer" if t.account == account => -t.amount,
+        "xfer" if t.to == account => t.amount,
+        _ => 0,
+    }
+}
+
+/// Mark an entry as seen at the bank (cleared) or not. Un-marking a reconciled one is allowed:
+/// it simply leaves the finished statement.
+pub fn set_cleared(doc: &LoroDoc, id: &str, cleared: bool) -> Result<()> {
+    let m = child(doc, "tx", id).ok_or(Error::NotFound)?;
+    let have = i(&m, "clr");
+    let want = if cleared { CLEARED } else { NOT_CLEARED };
+    if !(cleared && have == RECONCILED) && have != want {
+        m.insert("clr", want).map_err(loro)?;
+        doc.commit();
+    }
+    Ok(())
+}
+
+/// Finish a reconcile of `account` against a statement: allowed only when the cleared balance
+/// equals the statement's ending balance; every cleared entry of the account becomes reconciled.
+/// Returns how many entries were marked.
+pub fn finish_reconcile(doc: &LoroDoc, account: &str, date: &str, statement: i64) -> Result<usize> {
+    if !valid_date(date) {
+        return Err(Error::Invalid("date".into()));
+    }
+    check_cents(statement)?;
+    let a = child(doc, "acct", account).ok_or(Error::NotFound)?;
+    let txs = transactions(doc);
+    let cleared = i(&a, "start") + txs.iter().filter(|t| t.status != NOT_CLEARED).map(|t| effect(t, account)).sum::<i64>();
+    if cleared != statement {
+        return Err(Error::Invalid("difference".into()));
+    }
+    let mut n = 0;
+    for t in txs.iter().filter(|t| t.status == CLEARED && effect(t, account) != 0) {
+        if let Some(m) = child(doc, "tx", &t.id) {
+            m.insert("clr", RECONCILED).map_err(loro)?;
+            n += 1;
+        }
+    }
+    a.insert("rd", date).map_err(loro)?;
+    a.insert("rbal", statement).map_err(loro)?;
+    doc.commit();
+    Ok(n)
 }
 
 // ---------- repeating entries ----------
@@ -711,6 +801,7 @@ fn template(id: &str, m: &LoroMap) -> Tx {
         by: s(m, "by"),
         at: 0,
         parts: transactions_one(m),
+        status: NOT_CLEARED,
     }
 }
 
@@ -909,6 +1000,41 @@ mod tests {
         assert_eq!(x, y);
         assert_eq!(x.envelopes[0].balance, -500);
         assert_eq!((x.envelopes[0].name.as_str(), x.envelopes[0].amount), ("Groceries", 1500), "both field edits kept");
+    }
+
+    #[test]
+    fn reconcile_against_a_statement() {
+        let d = doc();
+        let bank = set_account(&d, None, "Bank", "bank", 100_000).unwrap();
+        let card = set_account(&d, None, "Card", "card", 0).unwrap();
+        let food = set_envelope(&d, None, "Food", 40_000, "m", None, "").unwrap();
+        let a = set_tx(&d, None, &exp(&bank, &food, 2_000), "Ana", 1).unwrap();
+        let b = set_tx(&d, None, &exp(&bank, &food, 3_000), "Ana", 2).unwrap();
+        let x = set_tx(&d, None, &TxInput { kind: "xfer".into(), date: "2026-11-10".into(), amount: 5_000, account: bank.clone(), to: card.clone(), ..Default::default() }, "Ana", 3).unwrap();
+        let acct = |id: &str| budget(&d, "2026-11-10").accounts.into_iter().find(|a| a.id == id).unwrap();
+        assert_eq!(acct(&bank).cleared, 100_000, "nothing cleared: the opening balance");
+        set_cleared(&d, &a, true).unwrap();
+        set_cleared(&d, &x, true).unwrap();
+        assert_eq!(acct(&bank).cleared, 93_000);
+        assert_eq!(acct(&card).cleared, 5_000, "a transfer clears on both accounts");
+        // The statement says 93,000: finishing is refused on any other number.
+        assert!(finish_reconcile(&d, &bank, "2026-11-30", 90_000).is_err());
+        assert_eq!(finish_reconcile(&d, &bank, "2026-11-30", 93_000).unwrap(), 2);
+        let st = |id: &str| transactions(&d).into_iter().find(|t| t.id == id).unwrap().status;
+        assert_eq!((st(&a), st(&b), st(&x)), (RECONCILED, NOT_CLEARED, RECONCILED));
+        assert_eq!((acct(&bank).rec_date.as_str(), acct(&bank).rec_balance), ("2026-11-30", 93_000));
+        // Clearing a reconciled one again doesn't demote it; changing its amount does.
+        set_cleared(&d, &a, true).unwrap();
+        assert_eq!(st(&a), RECONCILED);
+        set_tx(&d, Some(&a), &exp(&bank, &food, 2_000), "Ana", 9).unwrap();
+        assert_eq!(st(&a), RECONCILED, "same amount: still matches the bank");
+        set_tx(&d, Some(&a), &exp(&bank, &food, 2_500), "Ana", 9).unwrap();
+        assert_eq!(st(&a), NOT_CLEARED);
+        // Undo of a delete keeps the status.
+        let t = transactions(&d).into_iter().find(|t| t.id == x).unwrap();
+        delete_tx(&d, &x).unwrap();
+        restore_tx(&d, &t).unwrap();
+        assert_eq!(st(&x), RECONCILED);
     }
 
     #[test]

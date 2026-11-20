@@ -74,7 +74,7 @@ Envelope / Sobre, Available / Disponible, Fill / Llenar, Spent / Gasté, Got mon
 Transfer / Transferir, Account / Cuenta. Never: sync, group, peer, relay, key, unallocated, ledger, debit.
 
 ## Out on purpose (first version)
-Bank connections (paid aggregators, bank passwords), loans/debt payoff plans, reconcile,
+Bank connections (paid aggregators, bank passwords), loans/debt payoff plans,
 weekly periods. Each is a later item if asked.
 
 ## Repeating entries (added after the first look)
@@ -83,3 +83,13 @@ Every year; its date is the first date). Due dates post themselves when a budget
 entry has an id made from the repeat and the date, so two phones posting it offline make one entry, and one someone
 deleted stays deleted. Activity lists "Repeating" on top with the next date; tapping one changes the dates still to
 come or stops it ("Stop repeating"; Undo).
+
+## Reconcile (added after the first look)
+Goodbudget's reconcile (help: "How do I Reconcile My Accounts?", "Transaction Status Explained"): an account's sheet
+has **Reconcile with a statement**. The statement's date and ending balance at the top; below, oldest first, every
+entry of that account up to that date that is not reconciled yet, each with a tick ("Tick each entry your statement
+shows"); **Add a missing entry** opens Add on that account. At the bottom the cleared balance (opening balance plus
+ticked and reconciled entries) and the difference, green "Matches the statement" at zero. Ticks are saved as they
+are made (**Later** keeps them); **Finish** works only at zero and turns the ticked entries into reconciled ones.
+Activity shows a check on a cleared entry and a check in a circle on a reconciled one; the Accounts list says
+"reconciled <date>". Changing the amount, kind or accounts of a cleared entry clears its tick. CSV has a status column.

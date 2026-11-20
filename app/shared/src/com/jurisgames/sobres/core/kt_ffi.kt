@@ -911,6 +911,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_kt_ffi_checksum_method_ktnode_fill_plan(
     ): Int
+    external fun uniffi_kt_ffi_checksum_method_ktnode_finish_reconcile(
+    ): Int
     external fun uniffi_kt_ffi_checksum_method_ktnode_move_envelope(
     ): Int
     external fun uniffi_kt_ffi_checksum_method_ktnode_payees(
@@ -922,6 +924,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_kt_ffi_checksum_method_ktnode_restore_tx(
     ): Int
     external fun uniffi_kt_ffi_checksum_method_ktnode_set_account(
+    ): Int
+    external fun uniffi_kt_ffi_checksum_method_ktnode_set_cleared(
     ): Int
     external fun uniffi_kt_ffi_checksum_method_ktnode_set_currency(
     ): Int
@@ -1145,6 +1149,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_kt_ffi_fn_method_ktnode_fill_plan(`ptr`: Long,`listId`: RustBuffer.ByValue,`rule`: RustBuffer.ByValue,`today`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_kt_ffi_fn_method_ktnode_finish_reconcile(`ptr`: Long,`listId`: RustBuffer.ByValue,`accountId`: RustBuffer.ByValue,`date`: RustBuffer.ByValue,`statement`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Int
     external fun uniffi_kt_ffi_fn_method_ktnode_move_envelope(`ptr`: Long,`listId`: RustBuffer.ByValue,`envelopeId`: RustBuffer.ByValue,`afterId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_kt_ffi_fn_method_ktnode_payees(`ptr`: Long,`listId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1157,6 +1163,8 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_kt_ffi_fn_method_ktnode_set_account(`ptr`: Long,`listId`: RustBuffer.ByValue,`accountId`: RustBuffer.ByValue,`name`: RustBuffer.ByValue,`kind`: RustBuffer.ByValue,`start`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_kt_ffi_fn_method_ktnode_set_cleared(`ptr`: Long,`listId`: RustBuffer.ByValue,`txId`: RustBuffer.ByValue,`cleared`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     external fun uniffi_kt_ffi_fn_method_ktnode_set_currency(`ptr`: Long,`listId`: RustBuffer.ByValue,`currency`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_kt_ffi_fn_method_ktnode_set_envelope(`ptr`: Long,`listId`: RustBuffer.ByValue,`envelopeId`: RustBuffer.ByValue,`name`: RustBuffer.ByValue,`amount`: Long,`kind`: RustBuffer.ByValue,`due`: RustBuffer.ByValue,`group`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1587,10 +1595,13 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_kt_ffi_checksum_method_ktnode_delete_tx() and 0xFFFF) != 61966) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_kt_ffi_checksum_method_ktnode_export_csv() and 0xFFFF) != 56746) {
+    if ((lib.uniffi_kt_ffi_checksum_method_ktnode_export_csv() and 0xFFFF) != 54512) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_kt_ffi_checksum_method_ktnode_fill_plan() and 0xFFFF) != 51588) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_kt_ffi_checksum_method_ktnode_finish_reconcile() and 0xFFFF) != 21456) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_kt_ffi_checksum_method_ktnode_move_envelope() and 0xFFFF) != 51446) {
@@ -1609,6 +1620,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_kt_ffi_checksum_method_ktnode_set_account() and 0xFFFF) != 24835) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_kt_ffi_checksum_method_ktnode_set_cleared() and 0xFFFF) != 57868) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_kt_ffi_checksum_method_ktnode_set_currency() and 0xFFFF) != 43799) {
@@ -3230,7 +3244,7 @@ public interface KtNodeInterface {
     fun `deleteTx`(`listId`: kotlin.String, `txId`: kotlin.String)
     
     /**
-     * The activity as CSV (date, kind, payee, envelope, account, amount, note, by): one line per
+     * The activity as CSV (date, kind, payee, envelope, account, amount, note, by, status): one line per
      * envelope part, so a split shows as several lines.
      */
     fun `exportCsv`(`listId`: kotlin.String): kotlin.String
@@ -3239,6 +3253,12 @@ public interface KtNodeInterface {
      * The parts of "fill every envelope": rule "add" (each one's monthly share) or "top" (up to it).
      */
     fun `fillPlan`(`listId`: kotlin.String, `rule`: kotlin.String, `today`: kotlin.String): List<PartItem>
+    
+    /**
+     * Finish reconciling an account against a statement (refused unless the cleared balance equals
+     * `statement`). Returns how many entries became reconciled.
+     */
+    fun `finishReconcile`(`listId`: kotlin.String, `accountId`: kotlin.String, `date`: kotlin.String, `statement`: kotlin.Long): kotlin.UInt
     
     fun `moveEnvelope`(`listId`: kotlin.String, `envelopeId`: kotlin.String, `afterId`: kotlin.String?)
     
@@ -3261,6 +3281,11 @@ public interface KtNodeInterface {
     fun `restoreTx`(`listId`: kotlin.String, `tx`: TxItem)
     
     fun `setAccount`(`listId`: kotlin.String, `accountId`: kotlin.String?, `name`: kotlin.String, `kind`: kotlin.String, `start`: kotlin.Long): kotlin.String
+    
+    /**
+     * Mark an entry as seen at the bank, or not.
+     */
+    fun `setCleared`(`listId`: kotlin.String, `txId`: kotlin.String, `cleared`: kotlin.Boolean)
     
     fun `setCurrency`(`listId`: kotlin.String, `currency`: kotlin.String)
     
@@ -4768,7 +4793,7 @@ open class KtNode: Disposable, AutoCloseable, KtNodeInterface
 
     
     /**
-     * The activity as CSV (date, kind, payee, envelope, account, amount, note, by): one line per
+     * The activity as CSV (date, kind, payee, envelope, account, amount, note, by, status): one line per
      * envelope part, so a split shows as several lines.
      */
     @Throws(KtException::class)override fun `exportCsv`(`listId`: kotlin.String): kotlin.String {
@@ -4799,6 +4824,28 @@ open class KtNode: Disposable, AutoCloseable, KtNodeInterface
         FfiConverterString.lower(`listId`),
         FfiConverterString.lower(`rule`),
         FfiConverterString.lower(`today`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Finish reconciling an account against a statement (refused unless the cleared balance equals
+     * `statement`). Returns how many entries became reconciled.
+     */
+    @Throws(KtException::class)override fun `finishReconcile`(`listId`: kotlin.String, `accountId`: kotlin.String, `date`: kotlin.String, `statement`: kotlin.Long): kotlin.UInt {
+            return FfiConverterUInt.lift(
+    callWithHandle {
+    uniffiRustCallWithError(KtException) { _status ->
+    UniffiLib.uniffi_kt_ffi_fn_method_ktnode_finish_reconcile(
+        it,
+        
+        FfiConverterString.lower(`listId`),
+        FfiConverterString.lower(`accountId`),
+        FfiConverterString.lower(`date`),
+        FfiConverterLong.lower(`statement`),_status)
 }
     }
     )
@@ -4909,6 +4956,25 @@ open class KtNode: Disposable, AutoCloseable, KtNodeInterface
     }
     )
     }
+    
+
+    
+    /**
+     * Mark an entry as seen at the bank, or not.
+     */
+    @Throws(KtException::class)override fun `setCleared`(`listId`: kotlin.String, `txId`: kotlin.String, `cleared`: kotlin.Boolean)
+        = 
+    callWithHandle {
+    uniffiRustCallWithError(KtException) { _status ->
+    UniffiLib.uniffi_kt_ffi_fn_method_ktnode_set_cleared(
+        it,
+        
+        FfiConverterString.lower(`listId`),
+        FfiConverterString.lower(`txId`),
+        FfiConverterBoolean.lower(`cleared`),_status)
+}
+    }
+    
     
 
     
@@ -5097,6 +5163,18 @@ data class AccountItem (
     var `start`: kotlin.Long
     , 
     var `balance`: kotlin.Long
+    , 
+    /**
+     * Opening balance plus the cleared and reconciled entries.
+     */
+    var `cleared`: kotlin.Long
+    , 
+    /**
+     * Last finished reconcile ("" = never) and the statement balance it ended at.
+     */
+    var `recDate`: kotlin.String
+    , 
+    var `recBalance`: kotlin.Long
     
 ){
     
@@ -5118,6 +5196,9 @@ public object FfiConverterTypeAccountItem: FfiConverterRustBuffer<AccountItem> {
             FfiConverterString.read(buf),
             FfiConverterLong.read(buf),
             FfiConverterLong.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterLong.read(buf),
         )
     }
 
@@ -5126,7 +5207,10 @@ public object FfiConverterTypeAccountItem: FfiConverterRustBuffer<AccountItem> {
             FfiConverterString.allocationSize(value.`name`) +
             FfiConverterString.allocationSize(value.`kind`) +
             FfiConverterLong.allocationSize(value.`start`) +
-            FfiConverterLong.allocationSize(value.`balance`)
+            FfiConverterLong.allocationSize(value.`balance`) +
+            FfiConverterLong.allocationSize(value.`cleared`) +
+            FfiConverterString.allocationSize(value.`recDate`) +
+            FfiConverterLong.allocationSize(value.`recBalance`)
     )
 
     override fun write(value: AccountItem, buf: ByteBuffer) {
@@ -5135,6 +5219,9 @@ public object FfiConverterTypeAccountItem: FfiConverterRustBuffer<AccountItem> {
             FfiConverterString.write(value.`kind`, buf)
             FfiConverterLong.write(value.`start`, buf)
             FfiConverterLong.write(value.`balance`, buf)
+            FfiConverterLong.write(value.`cleared`, buf)
+            FfiConverterString.write(value.`recDate`, buf)
+            FfiConverterLong.write(value.`recBalance`, buf)
     }
 }
 
@@ -7212,6 +7299,11 @@ data class TxItem (
     var `atMs`: kotlin.ULong
     , 
     var `parts`: List<PartItem>
+    , 
+    /**
+     * 0 not cleared, 1 cleared (seen at the bank), 2 reconciled.
+     */
+    var `status`: kotlin.Long
     
 ){
     
@@ -7241,6 +7333,7 @@ public object FfiConverterTypeTxItem: FfiConverterRustBuffer<TxItem> {
             FfiConverterString.read(buf),
             FfiConverterULong.read(buf),
             FfiConverterSequenceTypePartItem.read(buf),
+            FfiConverterLong.read(buf),
         )
     }
 
@@ -7257,7 +7350,8 @@ public object FfiConverterTypeTxItem: FfiConverterRustBuffer<TxItem> {
             FfiConverterString.allocationSize(value.`note`) +
             FfiConverterString.allocationSize(value.`by`) +
             FfiConverterULong.allocationSize(value.`atMs`) +
-            FfiConverterSequenceTypePartItem.allocationSize(value.`parts`)
+            FfiConverterSequenceTypePartItem.allocationSize(value.`parts`) +
+            FfiConverterLong.allocationSize(value.`status`)
     )
 
     override fun write(value: TxItem, buf: ByteBuffer) {
@@ -7274,6 +7368,7 @@ public object FfiConverterTypeTxItem: FfiConverterRustBuffer<TxItem> {
             FfiConverterString.write(value.`by`, buf)
             FfiConverterULong.write(value.`atMs`, buf)
             FfiConverterSequenceTypePartItem.write(value.`parts`, buf)
+            FfiConverterLong.write(value.`status`, buf)
     }
 }
 

@@ -26,6 +26,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
@@ -132,7 +133,7 @@ enum class Section(val label: String, val tag: String) {
 }
 
 /** What the Add sheet opens on. */
-class AddRequest(val kind: String, val edit: TxItem? = null, val envelope: String? = null, val repeat: RepeatItem? = null)
+class AddRequest(val kind: String, val edit: TxItem? = null, val envelope: String? = null, val repeat: RepeatItem? = null, val account: String? = null)
 
 /** How often a repeating entry comes back (core: "w", "2w", "m", "y"). */
 private val EVERY = listOf("w" to "Every week", "2w" to "Every 2 weeks", "m" to "Every month", "y" to "Every year")
@@ -176,6 +177,7 @@ fun BudgetPane(
     var newEnv by remember { mutableStateOf(false) }
     var editAcct by remember { mutableStateOf<AccountItem?>(null) }
     var newAcct by remember { mutableStateOf(false) }
+    var reconcile by remember { mutableStateOf<String?>(null) }
     var currency by remember { mutableStateOf(false) }
 
     fun undoable(message: String, undo: () -> Unit) {
@@ -245,6 +247,16 @@ fun BudgetPane(
         }
     }
 
+    // Drawn before the Add sheet: "Add a missing entry" opens it on top, and the list below updates.
+    reconcile?.let { id ->
+        b.accounts.find { it.id == id }?.let { a ->
+            ReconcileDialog(env, list, b, a, activity, onClose = { reconcile = null }, onAdd = { add = AddRequest("exp", account = a.id) }, onDone = { n ->
+                reconcile = null
+                env.changed()
+                scope.launch { snackbar.showSnackbar(tr("Reconciled {name}", "name" to a.name) + if (n > 0) " · " + tr("{n} entries", "n" to n.toString()) else "") }
+            })
+        } ?: run { reconcile = null }
+    }
     add?.let { req ->
         AddSheet(env, list, b, activity, req, onClose = { add = null }, onSaved = { msg, undo, fillWith ->
             add = null
@@ -277,6 +289,7 @@ fun BudgetPane(
     }
     if (newAcct || editAcct != null) {
         AccountDialog(b, editAcct, onClose = { newAcct = false; editAcct = null },
+            onReconcile = editAcct?.let { a -> { editAcct = null; reconcile = a.id } },
             onDelete = editAcct?.let { a ->
                 {
                     runCatching { node.deleteAccount(list.id, a.id, false) }
@@ -539,7 +552,7 @@ private fun AddSheet(
     var payee by remember { mutableStateOf(src?.payee ?: "") }
     var note by remember { mutableStateOf(src?.note ?: "") }
     var date by remember { mutableStateOf(src?.date ?: today()) }
-    var account by remember { mutableStateOf(src?.accountId?.takeIf { it.isNotEmpty() } ?: lastAccount) }
+    var account by remember { mutableStateOf(src?.accountId?.takeIf { it.isNotEmpty() } ?: req.account ?: lastAccount) }
     var toAccount by remember { mutableStateOf(src?.toId?.takeIf { it.isNotEmpty() } ?: b.accounts.firstOrNull { it.id != account }?.id ?: "") }
     // Spent: one envelope, or a split (envelope -> typed amount)
     var envelope by remember { mutableStateOf(src?.parts?.singleOrNull()?.envelopeId ?: req.envelope ?: "") }
@@ -771,11 +784,99 @@ private fun ActivityView(b: BudgetView, activity: List<TxItem>, repeating: List<
                             else -> t.amount to MaterialTheme.colorScheme.onSurfaceVariant
                         }
                         Text(money(amt, b.currency, sign = t.kind == "inc" || (t.kind == "exp" && t.amount < 0)), color = color, fontWeight = FontWeight.Medium)
+                        StatusMark(t.status)
                     }
                 }
             }
         }
     }
+}
+
+/** Cleared (seen at the bank): a check; reconciled (part of a finished statement): a check in a circle. */
+@Composable
+private fun StatusMark(status: Long) {
+    if (status == 0L) return
+    Spacer(Modifier.width(6.dp))
+    val (icon, label) = if (status >= 2L) Ic.CheckCircle to tr("Reconciled") else Ic.Check to tr("Cleared")
+    Icon(icon, label, Modifier.size(16.dp).testTag("status-$status"), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
+// ---- Reconcile -------------------------------------------------------------------------------
+
+/**
+ * Goodbudget's reconcile: the statement's date and ending balance, then tick each entry the bank
+ * shows. Ticks are saved as they are made (closing keeps them for later); Finish is possible once
+ * the cleared balance equals the statement, and turns the ticked entries into reconciled ones.
+ */
+@Composable
+private fun ReconcileDialog(env: Env, list: ListItem, b: BudgetView, a: AccountItem, activity: List<TxItem>, onClose: () -> Unit, onAdd: () -> Unit, onDone: (Int) -> Unit) {
+    var date by remember(a.id) { mutableStateOf(today()) }
+    var statement by remember(a.id) { mutableStateOf("") }
+    val dateOk = runCatching { LocalDate.parse(date.trim()) }.isSuccess
+    val stmt = if (statement.isBlank()) null else parseCents(statement)
+    fun effect(t: TxItem): Long = when {
+        t.kind == "exp" && t.accountId == a.id -> -t.amount
+        t.kind == "inc" && t.accountId == a.id -> t.amount
+        t.kind == "xfer" && t.accountId == a.id -> -t.amount
+        t.kind == "xfer" && t.toId == a.id -> t.amount
+        else -> 0L
+    }
+    // Oldest first, like a statement; only what is not reconciled yet, up to the statement's date.
+    val open = activity.filter { it.status < 2L && effect(it) != 0L && (!dateOk || it.date <= date.trim()) }.sortedWith(compareBy({ it.date }, { it.atMs }))
+    val diff = stmt?.let { it - a.cleared }
+    AlertDialog(
+        onDismissRequest = onClose,
+        confirmButton = {
+            TextButton(enabled = dateOk && diff == 0L, onClick = {
+                runCatching { env.node.finishReconcile(list.id, a.id, date.trim(), stmt!!) }.onSuccess { onDone(it.toInt()) }
+            }, modifier = Modifier.testTag("recFinish")) { Text(tr("Finish")) }
+        },
+        dismissButton = { TextButton(onClick = onClose, modifier = Modifier.testTag("recLater")) { Text(tr("Later")) } },
+        title = { Text(tr("Reconcile {name}", "name" to a.name)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (a.recDate.isNotEmpty()) {
+                    Text(tr("Last statement: {date}, {amount}", "date" to dayLabel(a.recDate), "amount" to money(a.recBalance, b.currency)),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("recLast"))
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(date, { date = it }, singleLine = true, isError = !dateOk, label = { Text(tr("Statement date")) }, placeholder = { Text("2026-11-30") },
+                        modifier = Modifier.weight(1f).testTag("recDate"))
+                    OutlinedTextField(statement, { statement = it }, singleLine = true, isError = statement.isNotBlank() && stmt == null,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), label = { Text(tr("Ending balance")) },
+                        prefix = if (b.currency.isNotEmpty()) ({ Text(b.currency) }) else null, modifier = Modifier.weight(1f).testTag("recStatement"))
+                }
+                Text(tr("Tick each entry your statement shows."), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Column(Modifier.heightIn(max = 280.dp).verticalScroll(rememberScrollState())) {
+                    if (open.isEmpty()) Text(tr("No entries to tick."), color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 8.dp))
+                    for (t in open) {
+                        val ticked = t.status == 1L
+                        Row(Modifier.fillMaxWidth().clickable { runCatching { env.node.setCleared(list.id, t.id, !ticked) }; env.changed() }.testTag("rec-" + entryTitle(t)),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(ticked, { runCatching { env.node.setCleared(list.id, t.id, it) }; env.changed() })
+                            Column(Modifier.weight(1f)) {
+                                Text(entryTitle(t), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(dayLabel(t.date), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Text(money(effect(t), b.currency, sign = effect(t) > 0), color = if (effect(t) > 0) gainColor() else MaterialTheme.colorScheme.onSurface)
+                        }
+                    }
+                }
+                TextButton(onClick = onAdd, modifier = Modifier.testTag("recAdd")) {
+                    Icon(Ic.Add, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text(tr("Add a missing entry"))
+                }
+                HorizontalDivider()
+                Row { Text(tr("Cleared balance"), Modifier.weight(1f)); Text(money(a.cleared, b.currency), fontWeight = FontWeight.SemiBold, modifier = Modifier.testTag("recCleared")) }
+                if (diff != null) {
+                    Row {
+                        Text(tr("Difference"), Modifier.weight(1f))
+                        Text(if (diff == 0L) tr("Matches the statement") else money(diff, b.currency, sign = true),
+                            color = if (diff == 0L) gainColor() else MaterialTheme.colorScheme.error, fontWeight = FontWeight.SemiBold, modifier = Modifier.testTag("recDiff"))
+                    }
+                }
+            }
+        },
+    )
 }
 
 // ---- Accounts --------------------------------------------------------------------------------
@@ -789,7 +890,9 @@ private fun AccountsView(b: BudgetView, onOpen: (AccountItem) -> Unit, onNew: ()
             Row(Modifier.fillMaxWidth().clickable { onOpen(a) }.padding(horizontal = 16.dp, vertical = 12.dp).testTag("acct-" + a.name), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(a.name)
-                    Text(tr(ACCOUNT_KINDS.find { it.first == a.kind }?.second ?: "Bank"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    val kindName = tr(ACCOUNT_KINDS.find { it.first == a.kind }?.second ?: "Bank")
+                    Text(if (a.recDate.isEmpty()) kindName else kindName + " · " + tr("reconciled {date}", "date" to dayLabel(a.recDate)),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Text(money(a.balance, b.currency), fontWeight = FontWeight.SemiBold, color = if (a.balance < 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
             }
@@ -809,7 +912,7 @@ private fun AccountsView(b: BudgetView, onOpen: (AccountItem) -> Unit, onNew: ()
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun AccountDialog(b: BudgetView, a: AccountItem?, onClose: () -> Unit, onDelete: (() -> Unit)?, onSave: (String, String, Long) -> Unit) {
+private fun AccountDialog(b: BudgetView, a: AccountItem?, onClose: () -> Unit, onReconcile: (() -> Unit)?, onDelete: (() -> Unit)?, onSave: (String, String, Long) -> Unit) {
     var name by remember { mutableStateOf(a?.name ?: "") }
     var kind by remember { mutableStateOf(a?.kind ?: "bank") }
     var balance by remember { mutableStateOf(a?.let { centsText(it.balance) } ?: "") }
@@ -841,6 +944,11 @@ private fun AccountDialog(b: BudgetView, a: AccountItem?, onClose: () -> Unit, o
                     label = { Text(tr("How much is in it today?")) }, prefix = if (b.currency.isNotEmpty()) ({ Text(b.currency) }) else null, modifier = Modifier.testTag("acctBalance"))
                 Text(if (kind == "card") tr("For a card, enter what you owe as a negative amount.") else tr("This changes Available by the same amount."),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                onReconcile?.let {
+                    OutlinedButton(onClick = it, modifier = Modifier.testTag("reconcileOpen")) {
+                        Icon(Ic.CheckCircle, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text(tr("Reconcile with a statement"))
+                    }
+                }
             }
         },
     )
