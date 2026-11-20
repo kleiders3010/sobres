@@ -14,6 +14,6 @@ for abi in arm64-v8a:aarch64-linux-android x86_64:x86_64-linux-android; do
 done
 cargo build -p kt-ffi
 cargo run -q -p kt-ffi --features bindgen --bin uniffi-bindgen -- generate --library target/debug/kt_ffi.dll --language kotlin --out-dir target/uniffi-kotlin --no-format
-cp target/uniffi-kotlin/com/jurisgames/tasks/core/kt_ffi.kt app/shared/src/com/jurisgames/tasks/core/kt_ffi.kt
+cp target/uniffi-kotlin/com/jurisgames/sobres/core/kt_ffi.kt app/shared/src/com/jurisgames/sobres/core/kt_ffi.kt
 rm -f "$OUT"/*/libiroh*.so  # stray dylibs from dependencies; everything links into libkt_ffi.so
 ls -la "$OUT"/*/

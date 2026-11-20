@@ -276,7 +276,7 @@ pub async fn join_direct(p2p: Option<&Arc<P2p>>, rec: &InviteRecord) -> bool {
 
 /// The public join page (DESIGN §5). Everything after `#` stays in the browser or app: the
 /// fragment never reaches the server.
-pub const JOIN_BASE: &str = "https://apps.jurisgames.com";
+pub const JOIN_BASE: &str = "https://apps.jurisgames.com/sobres";
 
 /// The link (and QR) for a code: `…/join#words` for invites, `…/link#words` for device
 /// links, optionally followed by `~` and the sharing device's addresses for a direct

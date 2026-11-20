@@ -9,7 +9,7 @@ use kt_net::p2p::WhereData;
 fn links_round_trip() {
     let code = Code::parse(&kt_engine::invite::words()[100..108].join(" ")).unwrap();
     let url = share_url(&code, CodeKind::Invite, None);
-    assert!(url.starts_with("https://apps.jurisgames.com/join#"), "{url}");
+    assert!(url.starts_with("https://apps.jurisgames.com/sobres/join#"), "{url}");
     let s = parse_shared(&url).unwrap();
     assert_eq!(s.code.to_text(), code.to_text());
     assert_eq!(s.kind, Some(CodeKind::Invite));
@@ -33,7 +33,7 @@ fn links_round_trip() {
     assert!(s.direct.is_some(), "{url}");
 
     // Garbage after `~` is ignored, not fatal; garbage words are refused.
-    assert!(parse_shared(&format!("https://apps.jurisgames.com/join#{}~!!notbase64", code.to_words().join("-"))).unwrap().direct.is_none());
-    assert!(parse_shared("https://apps.jurisgames.com/join#not-a-code").is_err());
+    assert!(parse_shared(&format!("https://apps.jurisgames.com/sobres/join#{}~!!notbase64", code.to_words().join("-"))).unwrap().direct.is_none());
+    assert!(parse_shared("https://apps.jurisgames.com/sobres/join#not-a-code").is_err());
     assert!(parse_shared("").is_err());
 }

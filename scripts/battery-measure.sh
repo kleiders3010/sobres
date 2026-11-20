@@ -36,7 +36,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 ADB=~/AppData/Local/Android/Sdk/platform-tools/adb.exe
-PKG=${KT_PKG:-com.jurisgames.tasks}
+PKG=${KT_PKG:-com.jurisgames.sobres}
 # --pair PKG:SCENARIO measures a second copy of the app in the same run (same reset, same
 # conditions), e.g. the measure build under .m20 against the one under .m1.
 PAIR_PKG=""
@@ -135,7 +135,7 @@ measure_pkg() { # measure_pkg PKG MINUTES ENDPOINTS -> that app's status line
   local out pkg=$1
   shift
   # The receiver's class and action keep their names in every copy of the app.
-  out=$(a shell am broadcast --include-stopped-packages -n "$pkg/com.jurisgames.tasks.MeasureReceiver" -a com.jurisgames.tasks.MEASURE ${1:+--ei more_often_min "$1" --ei endpoints "$2"} | tr -d '\r')
+  out=$(a shell am broadcast --include-stopped-packages -n "$pkg/com.jurisgames.sobres.MeasureReceiver" -a com.jurisgames.sobres.MEASURE ${1:+--ei more_often_min "$1" --ei endpoints "$2"} | tr -d '\r')
   printf '%s\n' "$out" | sed -n 's/.*data="\(.*\)".*/\1/p'
 }
 measure() { measure_pkg "$PKG" "$@"; }

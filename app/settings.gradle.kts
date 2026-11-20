@@ -11,5 +11,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "juristasks"
+rootProject.name = "jurissobres"
 include(":android", ":desktop")

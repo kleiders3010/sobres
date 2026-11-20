@@ -4,7 +4,7 @@
 -keep class * implements com.sun.jna.** { *; }
 -dontwarn java.awt.**
 # UniFFI bindings: JNA maps these names to the Rust library's symbols.
--keep class com.jurisgames.tasks.core.** { *; }
+-keep class com.jurisgames.sobres.core.** { *; }
 # ML Kit (Google's code scanner, play flavor) finds its components by reflection from
 # manifest entries; shrinking them broke GmsBarcodeScanning.getClient (a crash on a real
 # phone, 2026-09-25).

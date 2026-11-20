@@ -111,7 +111,7 @@ mod tests {
     use super::*;
 
     const M: &str = r#"{"format":1,"apps":{"tasks":{"version_name":"0.2.0","version_code":2,
-        "android":{"play":"https://play.google.com/store/apps/details?id=com.jurisgames.tasks","apk":"https://github.com/kleiders3010/jurisgames/releases"},
+        "android":{"play":"https://play.google.com/store/apps/details?id=com.jurisgames.sobres","apk":"https://github.com/kleiders3010/jurisgames/releases"},
         "desktop":{"windows":"https://github.com/kleiders3010/jurisgames/releases","linux":"https://evil.example/x"}}}}"#;
 
     #[test]

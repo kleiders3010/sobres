@@ -9,7 +9,7 @@ fn share_links() {
     let seeds = vec![
         kt_net::invite_net::share_url(&code, CodeKind::Invite, None).into_bytes(),
         kt_net::invite_net::share_url(&code, CodeKind::Link, None).into_bytes(),
-        format!("https://apps.jurisgames.com/join#{}~AAECAwQ", code.to_words().join("-")).into_bytes(),
+        format!("https://apps.jurisgames.com/sobres/join#{}~AAECAwQ", code.to_words().join("-")).into_bytes(),
         code.to_text().into_bytes(),
     ];
     kt_fuzz::run("share-links", &seeds, 5.0, |b| {
@@ -19,7 +19,7 @@ fn share_links() {
 
 #[test]
 fn update_manifest() {
-    let seed = br#"{"format":1,"apps":{"tasks":{"version_name":"0.2.0","version_code":2,"android":{"play":"https://play.google.com/store/apps/details?id=com.jurisgames.tasks","apk":"https://github.com/kleiders3010/jurisgames/releases"},"desktop":{"windows":"https://github.com/kleiders3010/jurisgames/releases","linux":"https://github.com/kleiders3010/jurisgames/releases"}}}}"#;
+    let seed = br#"{"format":1,"apps":{"tasks":{"version_name":"0.2.0","version_code":2,"android":{"play":"https://play.google.com/store/apps/details?id=com.jurisgames.sobres","apk":"https://github.com/kleiders3010/jurisgames/releases"},"desktop":{"windows":"https://github.com/kleiders3010/jurisgames/releases","linux":"https://github.com/kleiders3010/jurisgames/releases"}}}}"#;
     use kt_net::update::{parse, Channel};
     kt_fuzz::run("update-manifest", &[seed.to_vec()], 5.0, |b| {
         for ch in [Channel::Play, Channel::Apk, Channel::Windows, Channel::Linux] {

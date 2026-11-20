@@ -19,22 +19,22 @@ dependencies {
 
 compose.desktop {
     application {
-        mainClass = "com.jurisgames.tasks.desktop.MainKt"
+        mainClass = "com.jurisgames.sobres.desktop.MainKt"
         nativeDistributions {
             targetFormats(org.jetbrains.compose.desktop.application.dsl.TargetFormat.Msi)
-            packageName = "Tasks"
-            packageVersion = "1.0.8"
+            packageName = "Sobres"
+            packageVersion = "1.0.0"
             vendor = "Juris Games"
-            description = "Shared task lists, no accounts, no servers"
+            description = "Shared envelope budget, no accounts, no servers"
             // JNA needs sun.misc.Unsafe; the rest is Compose's default runtime.
             modules("jdk.unsupported", "java.naming")
             // scripts/package-desktop.sh puts kt_ffi and the import worker here, per OS.
             appResourcesRootDir.set(layout.buildDirectory.dir("native"))
             windows {
-                menuGroup = "Tasks"
+                menuGroup = "Sobres"
                 perUserInstall = true
                 shortcut = true
-                upgradeUuid = "6f1d2a4e-8b3c-4f5a-9e7d-2c1b0a9f8e71"
+                upgradeUuid = "74608b51-91e6-4e4a-8ab6-e20062573730"
             }
         }
     }

@@ -23,7 +23,7 @@ account and no company server holding your data.
   Every layer only ever sees encrypted data. If one disappears, the others keep working.
 
 ## Download
-- Android: [Google Play](https://play.google.com/store/apps/details?id=com.jurisgames.tasks) or the APK on the
+- Android: [Google Play](https://play.google.com/store/apps/details?id=com.jurisgames.sobres) or the APK on the
   [releases page](https://github.com/kleiders3010/jurisgames/releases)
 - Windows: installer on the [releases page](https://github.com/kleiders3010/jurisgames/releases)
 

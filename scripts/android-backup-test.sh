@@ -7,7 +7,7 @@
 set -euo pipefail
 S=${1:?serial}
 ADB=~/AppData/Local/Android/Sdk/platform-tools/adb.exe
-PKG=com.jurisgames.tasks
+PKG=com.jurisgames.sobres
 APK=app/android/build/outputs/apk/play/debug/android-play-debug.apk
 TEST_APK=app/android/build/outputs/apk/androidTest/play/debug/android-play-debug-androidTest.apk
 a() { MSYS_NO_PATHCONV=1 "$ADB" -s "$S" "$@"; }

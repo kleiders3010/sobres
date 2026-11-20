@@ -1660,7 +1660,7 @@ impl KtNode {
             _ => return None,
         };
         self.rt
-            .block_on(check(&MANIFEST_URLS, "tasks", current_version_code, ch))
+            .block_on(check(&MANIFEST_URLS, "sobres", current_version_code, ch))
             .map(|u| UpdateItem { version_name: u.version_name, link: u.link })
     }
 

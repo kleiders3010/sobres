@@ -8,8 +8,6 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- On-time reminders (D43): asked when a reminder first needs it. -->
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- Same-Wi-Fi discovery beacons (multicast) while the app is open (§6). -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <application
@@ -36,8 +34,8 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="https" android:host="apps.jurisgames.com" android:pathPrefix="/join" />
-                <data android:scheme="https" android:host="apps.jurisgames.com" android:pathPrefix="/link" />
+                <data android:scheme="https" android:host="apps.jurisgames.com" android:pathPrefix="/sobres/join" />
+                <data android:scheme="https" android:host="apps.jurisgames.com" android:pathPrefix="/sobres/link" />
             </intent-filter>
         </activity>
         <provider
@@ -49,14 +47,6 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
-        <receiver android:name=".ReminderReceiver" android:exported="false" />
-        <receiver android:name=".RescheduleReceiver" android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
-                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
-            </intent-filter>
-        </receiver>
         <!-- Measurement only (Measure.kt): the "more often" alarm, and the adb switch, which
              only holders of DUMP (the adb shell) can reach. Off by default; no UI. -->
         <receiver android:name=".MoreOftenReceiver" android:exported="false" />
@@ -65,19 +55,8 @@
             android:exported="true"
             android:permission="android.permission.DUMP">
             <intent-filter>
-                <action android:name="com.jurisgames.tasks.MEASURE" />
+                <action android:name="com.jurisgames.sobres.MEASURE" />
             </intent-filter>
-        </receiver>
-        <receiver
-            android:name=".TasksWidgetReceiver"
-            android:exported="true"
-            android:label="${appLabel}">
-            <intent-filter>
-                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-            </intent-filter>
-            <meta-data
-                android:name="android.appwidget.provider"
-                android:resource="@xml/tasks_widget_info" />
         </receiver>
     </application>
 </manifest>

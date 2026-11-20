@@ -1,6 +1,6 @@
 # Technical Design Principles
 
-*Working name: Tasklist. Android package: `com.jurisgames.tasks` (permanent once published; the developer owns jurisgames.com). Status: **draft v2, 2026-09-24**. Folds in the decisions from the research phase (`docs/research/DECIDED.md`); still-open items are marked **⏳ pending** with their ID in `docs/research/DECISIONS.md`. Covers architecture and technical principles only, not UX or features. A hobby project: no payments, no support obligations.*
+*Working name: Tasklist. Android package: `com.jurisgames.sobres` (permanent once published; the developer owns jurisgames.com). Status: **draft v2, 2026-09-24**. Folds in the decisions from the research phase (`docs/research/DECIDED.md`); still-open items are marked **⏳ pending** with their ID in `docs/research/DECISIONS.md`. Covers architecture and technical principles only, not UX or features. A hobby project: no payments, no support obligations.*
 
 ## 1. Mission and hard constraints
 
@@ -330,7 +330,7 @@ Devices act as **helpers**: a user-run mailbox for other groups, like torrent se
 | Linux | Compose Desktop | AppImage, .deb / .rpm on GitHub Releases (Flathub not pursued) |
 | iOS | – | **Not supported** (D45) |
 
-- **Signing:** one app-signing key (`com.jurisgames.tasks`, RSA 4096, valid to 2054) for both Play (Play App Signing, "use my own key") and GitHub APKs, so installs from either source update each other. Backed up to a private repo (encrypted); password in Credential Manager and the developer's password manager.
+- **Signing:** one app-signing key (`com.jurisgames.sobres`, RSA 4096, valid to 2054) for both Play (Play App Signing, "use my own key") and GitHub APKs, so installs from either source update each other. Backed up to a private repo (encrypted); password in Credential Manager and the developer's password manager.
 - **Public repo** `kleiders3010/jurisgames` (separate from the private code repo), served by GitHub Pages at **apps.jurisgames.com** (jurisgames.com itself is a separate site): the join page, releases, the static update manifest (`/update.json`) and the operator manifest (D41). Update checks read the static manifest, not the rate-limited GitHub API: apps.jurisgames.com first, then the same file on `raw.githubusercontent.com` if that fails.
 - **Older Android versions:** Material You → theme colors below 12; E2E backup → sealed below 9 or without a lock.
 - **Permissions beyond the defaults** (explained first, asked only when needed):

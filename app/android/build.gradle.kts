@@ -6,16 +6,16 @@ plugins {
 }
 
 android {
-    namespace = "com.jurisgames.tasks"
+    namespace = "com.jurisgames.sobres"
     compileSdk {
         version = release(37) { minorApiLevel = 2 }
     }
     defaultConfig {
-        applicationId = "com.jurisgames.tasks"
+        applicationId = "com.jurisgames.sobres"
         minSdk = 26
         targetSdk = 36
-        versionCode = 10
-        versionName = "1.0.8"
+        versionCode = 1
+        versionName = "1.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["appLabel"] = "@string/app_name"
         // The Rust core is built for these only (scripts/build-android-libs.sh); JNA's
@@ -43,7 +43,7 @@ android {
         create("measure") {
             initWith(getByName("release"))
             applicationIdSuffix = (project.findProperty("measureId") as String?) ?: ".measure"
-            manifestPlaceholders["appLabel"] = (project.findProperty("measureLabel") as String?) ?: "Tasks (measure)"
+            manifestPlaceholders["appLabel"] = (project.findProperty("measureLabel") as String?) ?: "Sobres (measure)"
             signingConfig = signingConfigs.getByName("debug")
             matchingFallbacks += listOf("release")
         }
@@ -110,7 +110,6 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.work:work-runtime-ktx:2.12.0")
-    implementation("androidx.glance:glance-appwidget:1.2.0")
     // Drag to reorder tasks (Apache-2.0; Compose Multiplatform).
     implementation("sh.calvin.reorderable:reorderable:3.1.0")
     // The code scanner brings an old Fragment that breaks registerForActivityResult (lint).
@@ -126,6 +125,5 @@ dependencies {
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test:runner:1.7.0")
-    androidTestImplementation("androidx.glance:glance-appwidget-testing:1.2.0")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
