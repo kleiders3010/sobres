@@ -14,7 +14,7 @@ static INIT: Once = Once::new();
 
 /// `TasksApplication.initAndroidContext(context)` (Kotlin `external fun`).
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_jurisgames_tasks_TasksApplication_initAndroidContext(env: *mut JNIEnv, _this: jobject, context: jobject) {
+pub extern "system" fn Java_com_jurisgames_sobres_TasksApplication_initAndroidContext(env: *mut JNIEnv, _this: jobject, context: jobject) {
     INIT.call_once(|| unsafe {
         let fns = &**env;
         let (Some(get_vm), Some(new_global)) = (fns.GetJavaVM, fns.NewGlobalRef) else { return };
