@@ -1,0 +1,17 @@
+{
+  "a": {
+    "Diary": [
+      "private note"
+    ],
+    "Groceries": [
+      "eggs",
+      "milk"
+    ]
+  },
+  "b": {
+    "Groceries": [
+      "eggs",
+      "milk"
+    ]
+  }
+}

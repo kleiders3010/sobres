@@ -1,0 +1,9 @@
+[package]
+name = "kt-fuzz"
+description = "Stable-Rust mutation fuzzing driver for Kleiders Tasks parsers (tests only)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]

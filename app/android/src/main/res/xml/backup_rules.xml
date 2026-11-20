@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 and older. Only the sealed backup file leaves the device: the working data
+     is rebuilt from it, and the device identity (noBackupFilesDir) is never backed up (D1). -->
+<full-backup-content>
+    <include domain="file" path="backup/tasks.ktbackup" />
+</full-backup-content>

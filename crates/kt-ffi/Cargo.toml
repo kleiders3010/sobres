@@ -1,0 +1,43 @@
+[package]
+name = "kt-ffi"
+description = "Kotlin bridge (UniFFI) for Kleiders Tasks: one KtNode object for the app"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "kt_ffi"
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+bindgen = ["uniffi/cli"]
+# Desktop builds: include the helper relay server (D51).
+desktop = ["kt-net/relay-server"]
+
+[dependencies]
+kt-engine = { path = "../kt-engine" }
+kt-tasks = { path = "../kt-tasks" }
+kt-net = { path = "../kt-net", default-features = false }
+uniffi.workspace = true
+tokio.workspace = true
+hex.workspace = true
+serde.workspace = true
+qrcode = { version = "=0.14.1", default-features = false }
+loro.workspace = true
+thiserror.workspace = true
+# Compile out dependencies' internal logging in release builds (size; the app has its own diagnostics).
+tracing = { version = "0.1", default-features = false, features = ["release_max_level_off"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+# Register the app Context for iroh's DNS resolver and network monitor (src/android.rs).
+jni-sys = "=0.3.1"
+ndk-context = "=0.1.1"
+
+[target.'cfg(windows)'.dependencies]
+# DPAPI seals the device identity with the Windows user's key (src/vault.rs).
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Cryptography"] }

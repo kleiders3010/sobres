@@ -1,0 +1,54 @@
+[workspace]
+resolver = "3"
+members = ["crates/kt-engine", "crates/kt-tasks", "crates/kt-net", "crates/kt-cli", "crates/kt-ffi", "crates/kt-fuzz"]
+exclude = ["research"]
+
+[workspace.package]
+edition = "2024"
+version = "1.0.8"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+loro = "=1.16.2"
+ed25519-dalek = { version = "=2.2.0", features = ["rand_core"] }
+x25519-dalek = { version = "=2.0.1", features = ["static_secrets"] }
+chacha20poly1305 = "=0.10.1"
+hkdf = "=0.12.4"
+sha2 = "=0.10.9"
+blake3 = "=1.8.7"
+rand = "=0.8.5"
+rand_core = { version = "=0.6.4", features = ["getrandom"] }
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.151"
+postcard = { version = "=1.1.3", features = ["use-std"] }
+thiserror = "=2.0.21"
+anyhow = "=1.0.100"
+zeroize = "=1.9.0"
+hex = "=0.4.3"
+uniffi = "=0.32.2"
+argon2 = { version = "=0.5.3", default-features = false, features = ["alloc"] }
+# Networking (M2). Versions match what iroh 1.2 already pulls in, so they add no app size.
+tokio = { version = "=1.53.1", features = ["rt-multi-thread", "macros", "time", "sync", "net", "io-util"] }
+tokio-websockets = { version = "=0.13.3", features = ["client", "server", "ring", "getrandom", "rustls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+nostr = { version = "=0.45.5", features = ["std", "os-rng"] }
+base64 = "0.22"
+rustls = { version = "=0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
+http = "1"
+iroh = "=1.2.0"
+mainline = { version = "=8.0.0", default-features = false, features = ["async"] }
+reqwest = { version = "=0.13.5", default-features = false, features = ["rustls-no-provider"] }
+iroh-relay = { version = "=1.2.0" }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "unwind"
+strip = true
+
+# Argon2id (64 MiB) is painfully slow unoptimized; tests derive invite keys often.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3

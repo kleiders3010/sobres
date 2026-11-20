@@ -1,0 +1,32 @@
+# Rust
+/target/
+**/target/
+
+# Gradle / Android / IntelliJ
+.gradle/
+build/
+!docs/build/
+local.properties
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.jks
+*.keystore
+
+# OS
+.DS_Store
+Thumbs.db
+research/experiments/rust/**/fuzz_out/*.txt
+research/experiments/rust/**/fuzz_out/last_input.bin
+/target/
+
+# Android / Gradle app
+app/.gradle/
+app/local.properties
+app/**/build/
+app/android/src/main/jniLibs/
+dist/

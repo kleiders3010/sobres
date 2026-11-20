@@ -1,0 +1,16 @@
+# Cloud mailbox (developer-run slot store, always written; reads follow helper health). Free plan:
+# SQLite-backed Durable Objects only.
+name = "kt-mailbox"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+workers_dev = false
+# A stable address on our own domain (DNS is on Cloudflare): the app ships this URL.
+routes = [{ pattern = "mailbox.jurisgames.com", custom_domain = true }]
+
+[[durable_objects.bindings]]
+name = "TOPICS"
+class_name = "Topic"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Topic"]

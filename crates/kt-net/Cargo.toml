@@ -1,0 +1,55 @@
+[package]
+name = "kt-net"
+description = "Transports for kt-engine: capability-based mailboxes (Nostr first), sync driver"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[features]
+default = ["relay-server"]
+# The helper relay *server* (desktops relay live connections for others, D51). Phones never
+# run it, so the Android build leaves it out.
+relay-server = ["dep:iroh-relay", "dep:rcgen", "dep:portmapper"]
+
+[dependencies]
+kt-engine = { path = "../kt-engine" }
+tokio.workspace = true
+tokio-websockets.workspace = true
+futures-util.workspace = true
+nostr.workspace = true
+base64.workspace = true
+http.workspace = true
+rustls.workspace = true
+iroh.workspace = true
+iroh-relay = { workspace = true, optional = true, features = ["server"] }
+reqwest.workspace = true
+mainline.workspace = true
+rand.workspace = true
+hex.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+blake3.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+postcard.workspace = true
+# Helper relay TLS with pinned keys (src/relay_tls.rs).
+webpki = { package = "rustls-webpki", version = "=0.103.15" }
+webpki-roots = "=1.0.9"
+rcgen = { version = "=0.14.10", optional = true, default-features = false, features = ["crypto", "ring"] }
+portmapper = { version = "=0.19.3", optional = true }
+
+[dev-dependencies]
+kt-fuzz = { path = "../kt-fuzz" }
+postcard.workspace = true
+hex.workspace = true
+rustls.workspace = true
+iroh.workspace = true
+blake3.workspace = true
+mainline.workspace = true
+nostr.workspace = true
+base64.workspace = true
+tokio.workspace = true
+loro.workspace = true
+rand.workspace = true
+sha2.workspace = true
+reqwest.workspace = true

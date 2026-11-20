@@ -1,0 +1,21 @@
+[package]
+name = "kt-tasks"
+description = "Task-list domain for Kleiders Tasks on top of kt-engine"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+kt-engine = { path = "../kt-engine" }
+loro.workspace = true
+rand.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+# HCT colors (DESIGN §2 appearance): list hues and theme palettes, tone chosen per theme.
+material-colors = "=0.4.2"
+
+[dev-dependencies]
+kt-fuzz = { path = "../kt-fuzz" }
+rand.workspace = true
+serde_json.workspace = true
