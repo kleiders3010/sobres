@@ -56,7 +56,21 @@ class DesktopBudgetTest {
     private fun shot(name: String) {
         val o = out ?: return
         rule.waitForIdle()
-        javax.imageio.ImageIO.write(rule.onRoot().captureToImage().toAwtImage(), "png", File(o, "budget-$name.png"))
+        // A dialog is a second root: draw it centered over the dimmed screen, as a person sees it.
+        val roots = rule.onAllNodes(androidx.compose.ui.test.isRoot())
+        val count = roots.fetchSemanticsNodes().size
+        val base = roots[0].captureToImage().toAwtImage()
+        val img = java.awt.image.BufferedImage(base.getWidth(null), base.getHeight(null), java.awt.image.BufferedImage.TYPE_INT_RGB)
+        val g = img.createGraphics()
+        g.drawImage(base, 0, 0, null)
+        for (i in 1 until count) {
+            val top = roots[i].captureToImage().toAwtImage()
+            g.color = java.awt.Color(0, 0, 0, 90)
+            g.fillRect(0, 0, img.width, img.height)
+            g.drawImage(top, (img.width - top.getWidth(null)) / 2, (img.height - top.getHeight(null)) / 2, null)
+        }
+        g.dispose()
+        javax.imageio.ImageIO.write(img, "png", File(o, "budget-$name.png"))
     }
 
     @Test

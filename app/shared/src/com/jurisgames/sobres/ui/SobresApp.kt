@@ -395,6 +395,7 @@ private fun NewListDialog(env: Env, onCreated: (ListItem) -> Unit, onClose: () -
     fun create() {
         if (name.isBlank()) return
         val l = runCatching { env.node.createList(null, name.trim()) }.getOrNull() ?: return
+        runCatching { env.node.setListStyle(l.id, budgetHue(env.node.lists().size - 1), 1u, null) }
         env.changed()
         onCreated(l)
     }

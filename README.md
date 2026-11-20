@@ -1,26 +1,30 @@
-# Tasks: shared lists, no account
+# Sobres: a shared envelope budget, no account
 
-A free, open-source to-do and shopping list app for Android and Windows. Open it and type: it starts on your last
-list. Share a list with a link, QR code or 8 words; changes reach everyone's devices end-to-end encrypted, with no
-account and no company server holding your data.
+A free, open-source envelope budget for Android and Windows, made to be shared by a couple, a family or a flat.
+Give every bit of money a job ("envelopes"), record what you spend in a few taps, and everyone in the budget sees the
+same numbers on their own phone. No account, no subscription, no device limit, no bank logins, no company server
+holding your money data.
 
-- **Quick:** Enter adds and keeps the field open; "tomorrow at 5" becomes a reminder and "every monday" a repeating one
-  (ticked off, it comes back on its next date, like Todoist's); shopping lists bring finished
-  items back with one tap; swipe to delete with Undo.
-- **Starred:** star what matters (like Google Tasks): every starred task of every list in one place, and each list
-  sorted by your order, by date, or starred first.
-- **Upcoming:** every task with a date, from every list, under its day (like Todoist's Today and Upcoming);
-  overdue ones move to today in one tap.
-- **Print:** print a list (like Microsoft To Do's Print list), with or without its steps and notes: what's left to
-  do, in the list's order, with a box to tick on paper; long names wrap instead of being cut off. Android's print
-  service (a printer or Save as PDF) or the Windows print dialog.
-- **Shared:** any list can be shared; everyone edits at once and edits merge (CRDTs, [Loro](https://loro.dev)).
-  In a shared list a task can be assigned to one of its people, yourself too (like Microsoft To Do's Assign to):
-  the row shows who, and "Assigned to me" gathers what's yours from every list. Moving a task to another list
-  drops its assignment.
+- **Envelopes:** each with a monthly amount, a yearly one (set aside a twelfth each month) or a goal by a date
+  (split over the months left). Group them under headings. A bar shows what is left; an envelope says whether you are
+  on track for the month or behind.
+- **Available:** what your accounts hold minus what your envelopes hold. **Fill** gives it jobs in one step: each
+  envelope's monthly amount, or just a top-up to it, or any amount you type.
+- **Spent… in seconds:** amount, what for (earlier payees are suggested and pick their envelope and account), the
+  envelope with what's left in it, the account. Split one purchase over several envelopes; refunds; Undo.
+- **Got money, Move, Transfer:** income into an account (and straight into envelopes if you like), money moved
+  between envelopes, transfers between accounts (paying a card is one).
+- **Activity and Month:** every entry by day, searchable, with who entered it in a shared budget; spending by
+  envelope per month. CSV export.
+- **Shared:** invite with a link, QR code or 8 words. Two people can spend from the same envelope at the same time,
+  offline, and nothing is lost or counted twice: balances are always added up from the entries, never stored.
 - **No servers you depend on:** devices reach each other directly ([iroh](https://iroh.computer)), over the same
-  Wi-Fi, through public Nostr relays, the Mainline DHT, other users' apps that help carry changes, and a small mailbox.
-  Every layer only ever sees encrypted data. If one disappears, the others keep working.
+  Wi-Fi, through public Nostr relays, the Mainline DHT, other users' apps that help carry changes, and a small
+  mailbox. Every layer only ever sees encrypted data (CRDTs, [Loro](https://loro.dev)).
+- English and Spanish.
+
+Not in this first version: bank connections (they need paid aggregators and your bank password), debt payoff plans,
+scheduled entries, reconciling against a statement.
 
 ## Download
 - Android: [Google Play](https://play.google.com/store/apps/details?id=com.jurisgames.sobres) or the APK on the
@@ -28,11 +32,15 @@ account and no company server holding your data.
 - Windows: installer on the [releases page](https://github.com/kleiders3010/jurisgames/releases)
 
 ## Build
-- Rust core (`crates/`): `cargo test --workspace`
+- Rust core (`crates/`): `cargo test --workspace` (the budget is `crates/kt-tasks/src/budget.rs`)
 - Android: `scripts/build-android-libs.sh`, then `cd app && ./gradlew :android:assemblePlayRelease`
 - Desktop: `scripts/package-desktop.sh`
-- Design: [docs/DESIGN.md](docs/DESIGN.md) · UX: [docs/UX-PRINCIPLES.md](docs/UX-PRINCIPLES.md),
-  [docs/UI-SPEC.md](docs/UI-SPEC.md)
+- Screens: [docs/UI-SPEC.md](docs/UI-SPEC.md) · sync design: [docs/DESIGN.md](docs/DESIGN.md)
+
+Sobres shares its sync engine with [Tasks](https://github.com/kleiders3010/kleiders-tasks).
+
+## Privacy
+[apps.jurisgames.com/privacy](https://apps.jurisgames.com/privacy/)
 
 ## License
 Apache-2.0. Icons from Google's Material Icons (Apache-2.0).

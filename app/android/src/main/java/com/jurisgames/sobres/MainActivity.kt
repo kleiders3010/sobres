@@ -178,7 +178,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private companion object {
-        val INVITE_LINK = Regex("https://apps\\.jurisgames\\.com/(join|link)/?#[^\\s]+")
+        val INVITE_LINK = Regex("https://apps\\.jurisgames\\.com/sobres/(join|link)/?#[^\\s]+")
     }
 
     override fun onStart() {

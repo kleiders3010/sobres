@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -386,7 +387,7 @@ private fun EnvelopeDialog(b: BudgetView, e: EnvelopeItem, activity: List<TxItem
                 TextButton(onClick = onDelete, modifier = Modifier.testTag("envDelete")) { Text(tr("Delete envelope"), color = MaterialTheme.colorScheme.error) }
                 if (mine.isNotEmpty()) {
                     HorizontalDivider()
-                    Column(Modifier.height(220.dp).verticalScroll(rememberScrollState())) {
+                    Column(Modifier.heightIn(max = 220.dp).verticalScroll(rememberScrollState())) {
                         for (t in mine) {
                             val c = t.parts.filter { it.envelopeId == e.id }.sumOf { it.cents }
                             Row(Modifier.fillMaxWidth().clickable { onEntry(t) }.padding(vertical = 6.dp)) {
@@ -474,7 +475,7 @@ private fun FillDialog(env: Env, list: ListItem, b: BudgetView, extra: Long, onC
                     OutlinedButton(onClick = { applyPlan("add") }, modifier = Modifier.testTag("fillMonthly")) { Text(tr("Monthly amount")) }
                     OutlinedButton(onClick = { applyPlan("top") }, modifier = Modifier.testTag("fillTop")) { Text(tr("Top up")) }
                 }
-                Column(Modifier.height(300.dp).verticalScroll(rememberScrollState())) {
+                Column(Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState())) {
                     for (e in b.envelopes) {
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
                             Column(Modifier.weight(1f)) {
@@ -822,7 +823,7 @@ private fun MonthView(env: Env, list: ListItem, b: BudgetView, activity: List<Tx
             Column(Modifier.testTag("spend-" + s.envelopeName)) {
                 Row {
                     Text(s.envelopeName, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(money(s.cents, b.currency) + if (spent > 0) "  ·  ${(s.cents * 100 / spent)}%" else "")
+                    Text(money(s.cents, b.currency) + if (spent > 0) "  ·  ${((s.cents * 100 + spent / 2) / spent)}%" else "")
                 }
                 Bar((s.cents.toFloat() / top).coerceIn(0f, 1f), accent)
             }
@@ -845,6 +846,7 @@ fun FirstBudget(env: Env, onLinkThis: () -> Unit, onMenu: (() -> Unit)?, open: (
         val c = cents ?: return
         val node = env.node
         val l = runCatching { node.createList(null, tr("My budget")) }.getOrNull() ?: return
+        runCatching { node.setListStyle(l.id, budgetHue(0), 1u, null) }
         runCatching {
             node.setAccount(l.id, null, tr("Bank"), "bank", c)
             for ((name, amt) in listOf(tr("Groceries") to 30000L, tr("Bills") to 20000L, tr("Fun") to 5000L)) node.setEnvelope(l.id, null, name, amt, "m", null, "")
@@ -867,3 +869,6 @@ fun FirstBudget(env: Env, onLinkThis: () -> Unit, onMenu: (() -> Unit)?, open: (
         }
     }
 }
+
+/** A new budget's color: green first, then the next of a few distinct hues (changeable in ⋮ › Color). */
+fun budgetHue(index: Int): Double = listOf(150.0, 210.0, 30.0, 280.0, 340.0)[Math.floorMod(index, 5)]
