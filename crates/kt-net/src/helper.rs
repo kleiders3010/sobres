@@ -145,15 +145,8 @@ async fn send_frame<T: Serialize>(s: &mut SendStream, v: &T) -> Result<(), Strin
 }
 
 async fn recv_frame<T: DeserializeOwned>(r: &mut RecvStream) -> Result<T, String> {
-    let mut len = [0u8; 4];
-    r.read_exact(&mut len).await.map_err(|e| e.to_string())?;
-    let n = u32::from_le_bytes(len) as usize;
-    if n > MAX_FRAME {
-        return Err("frame too large".into());
-    }
-    let mut b = vec![0u8; n];
-    r.read_exact(&mut b).await.map_err(|e| e.to_string())?;
-    postcard::from_bytes(&b).map_err(|e| e.to_string())
+    // Bounded in time, memory grows only as bytes arrive (p2p::recv_frame_max).
+    crate::p2p::recv_frame_max(r, MAX_FRAME).await
 }
 
 fn put_message(topic: &[u8; 32], version: u64, blob: &[u8]) -> Vec<u8> {

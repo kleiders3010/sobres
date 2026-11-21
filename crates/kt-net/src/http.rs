@@ -21,6 +21,22 @@ pub fn client(timeout: Duration) -> Option<reqwest::Client> {
     reqwest::Client::builder().tls_backend_preconfigured(tls_config()).timeout(timeout).build().ok()
 }
 
+/// A response body of at most `max` bytes, read as it arrives: a broken or taken-over server can't make the app
+/// hold an endless answer (safety audit round 4, T15b). None if it is longer or fails.
+pub async fn bytes_capped(mut resp: reqwest::Response, max: usize) -> Option<Vec<u8>> {
+    if resp.content_length().is_some_and(|l| l as usize > max) {
+        return None;
+    }
+    let mut out = Vec::new();
+    while let Some(chunk) = resp.chunk().await.ok()? {
+        if out.len() + chunk.len() > max {
+            return None;
+        }
+        out.extend_from_slice(&chunk);
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

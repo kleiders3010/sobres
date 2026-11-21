@@ -150,14 +150,37 @@ async fn send_frame<T: Serialize>(s: &mut SendStream, v: &T) -> Result<(), Strin
 }
 
 async fn recv_frame<T: DeserializeOwned>(r: &mut RecvStream) -> Result<T, String> {
+    recv_frame_max(r, MAX_FRAME).await
+}
+
+/// How long one frame may take to arrive (a peer that sends a length and then nothing is dropped).
+/// Generous: the far side may be importing a big batch before it answers.
+pub(crate) const FRAME_TIMEOUT: Duration = Duration::from_secs(120);
+/// The first frame of a stream from a peer that isn't known yet (a hello, a blob or invite id).
+pub(crate) const HELLO_MAX: usize = 1024 * 1024;
+const ID_FRAME_MAX: usize = 64;
+/// Streams one connection may have open at once; more are dropped.
+pub(crate) const STREAMS_PER_CONN: usize = 16;
+
+/// Reads one length-prefixed frame of at most `max` bytes within [`FRAME_TIMEOUT`]. Memory grows only as bytes
+/// really arrive (never a buffer of the announced length up front): a stranger who sends a length prefix and
+/// nothing else costs nothing (safety audit round 4, T7).
+pub(crate) async fn recv_frame_max<T: DeserializeOwned>(r: &mut RecvStream, max: usize) -> Result<T, String> {
+    let late = |_| "frame timed out".to_string();
     let mut len = [0u8; 4];
-    r.read_exact(&mut len).await.map_err(|e| e.to_string())?;
+    tokio::time::timeout(FRAME_TIMEOUT, r.read_exact(&mut len)).await.map_err(late)?.map_err(|e| e.to_string())?;
     let n = u32::from_le_bytes(len) as usize;
-    if n > MAX_FRAME {
-        return Err("frame too large".into());
+    if n > max {
+        return Err("frame too large".to_string());
     }
-    let mut b = vec![0u8; n];
-    r.read_exact(&mut b).await.map_err(|e| e.to_string())?;
+    // Each 64 KiB must arrive within the time limit (a slow relay still carries a big honest reply).
+    let mut b = Vec::with_capacity(n.min(64 * 1024));
+    let mut chunk = vec![0u8; n.min(64 * 1024)];
+    while b.len() < n {
+        let want = (n - b.len()).min(chunk.len());
+        tokio::time::timeout(FRAME_TIMEOUT, r.read_exact(&mut chunk[..want])).await.map_err(late)?.map_err(|e| e.to_string())?;
+        b.extend_from_slice(&chunk[..want]);
+    }
     postcard::from_bytes(&b).map_err(|e| e.to_string())
 }
 
@@ -596,11 +619,15 @@ impl P2p {
             tokio::spawn(async move {
                 let Ok(conn) = inc.await else { return };
                 let remote = conn.remote_id();
+                // A budget of open streams per connection: more are dropped, not queued.
+                let streams = Arc::new(tokio::sync::Semaphore::new(STREAMS_PER_CONN));
                 if conn.alpn() == BLOB_ALPN {
                     while let Ok((mut s, mut r)) = conn.accept_bi().await {
+                        let Ok(permit) = streams.clone().try_acquire_owned() else { continue };
                         let store = me.blob_store.lock().expect("lock").clone();
                         tokio::spawn(async move {
-                            if let Ok(id) = recv_frame::<[u8; 32]>(&mut r).await {
+                            let _permit = permit;
+                            if let Ok(id) = recv_frame_max::<[u8; 32]>(&mut r, ID_FRAME_MAX).await {
                                 let _ = send_frame(&mut s, &store.and_then(|st| st.get(&id))).await;
                                 let _ = s.finish();
                             }
@@ -610,9 +637,11 @@ impl P2p {
                 }
                 if conn.alpn() == INVITE_ALPN {
                     while let Ok((mut s, mut r)) = conn.accept_bi().await {
+                        let Ok(permit) = streams.clone().try_acquire_owned() else { continue };
                         let board = me.invites.lock().expect("lock").clone();
                         tokio::spawn(async move {
-                            if let Ok(lookup) = recv_frame::<[u8; 32]>(&mut r).await {
+                            let _permit = permit;
+                            if let Ok(lookup) = recv_frame_max::<[u8; 32]>(&mut r, ID_FRAME_MAX).await {
                                 let _ = send_frame(&mut s, &board.get(&lookup).cloned()).await;
                                 let _ = s.finish();
                             }
@@ -627,9 +656,11 @@ impl P2p {
                         return;
                     };
                     while let Ok((s, r)) = conn.accept_bi().await {
+                        let Ok(permit) = streams.clone().try_acquire_owned() else { continue };
                         let h = h.clone();
                         let me3 = me.clone();
                         tokio::spawn(async move {
+                            let _permit = permit;
                             if let Ok(Some((put, fanout))) = h.serve(s, r).await {
                                 crate::helper::forward(&me3, &put, &fanout).await;
                             }
@@ -638,8 +669,10 @@ impl P2p {
                     return;
                 }
                 while let Ok((s, r)) = conn.accept_bi().await {
+                    let Ok(permit) = streams.clone().try_acquire_owned() else { continue };
                     let me2 = me.clone();
                     tokio::spawn(async move {
+                        let _permit = permit;
                         let _ = me2.serve(remote, s, r).await;
                     });
                 }
@@ -664,7 +697,8 @@ impl P2p {
     }
 
     async fn serve(&self, remote: EndpointId, mut s: SendStream, mut r: RecvStream) -> Result<(), String> {
-        let hello: Hello = recv_frame(&mut r).await?;
+        // Not known yet: a small first frame only (the full size comes after the membership check).
+        let hello: Hello = recv_frame_max(&mut r, HELLO_MAX).await?;
         let mut joined = None;
         if let Some(j) = &hello.join {
             // Adds the device if its invite is open (checks as for a join slot); then our

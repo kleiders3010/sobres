@@ -91,19 +91,23 @@ fun JoinDialog(env: Env, prefilled: String?, onJoined: (String) -> Unit, onClose
     }
 
     // A pasted code or link: fill everything and go.
-    fun takeWhole(text: String): Boolean {
+    // What the person typed, pasted or scanned here joins right away; a link that opened the app only fills the
+    // screen and waits for "Join" (any web page or app can open one).
+    fun takeWhole(text: String, go: Boolean = true): Boolean {
         val t = text.trim()
         if (t.startsWith("http") || t.contains("://")) {
-            link = t; join(t); return true
+            link = t
+            if (go) join(t)
+            return true
         }
         val parts = t.split(Regex("[\\s\\-,.]+")).filter { it.isNotEmpty() }
         if (parts.size < CODE_WORDS) return false
         parts.take(CODE_WORDS).forEachIndexed { i, p -> words[i] = settleWord(p) { node.completeWord(it) }?.takeIf { it.isNotEmpty() } ?: p.lowercase() }
-        join(words.joinToString(" "))
+        if (go) join(words.joinToString(" "))
         return true
     }
 
-    LaunchedEffect(prefilled) { prefilled?.let { takeWhole(it) } }
+    LaunchedEffect(prefilled) { prefilled?.let { takeWhole(it, go = false) } }
     LaunchedEffect(busy) {
         if (busy) {
             var n = 0

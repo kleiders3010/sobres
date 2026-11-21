@@ -65,12 +65,36 @@ function leadingZeros(h) {
   return z;
 }
 
+// The network an address belongs to: IPv6 by /64 (one home or phone gets a whole /64), IPv4 as it is.
+export function netOf(ip) {
+  if (!ip) return "?";
+  if (!ip.includes(":")) return ip;
+  const [head, tail] = ip.split("::");
+  const a = head ? head.split(":") : [];
+  const b = tail !== undefined && tail ? tail.split(":") : [];
+  const full = tail === undefined ? a : [...a, ...Array(8 - a.length - b.length).fill("0"), ...b];
+  return full.slice(0, 4).map((x) => x.toLowerCase().replace(/^0+(?=.)/, "")).join(":") + "::/64";
+}
+
+const MAX_BODY = 112 + MAX_SLOT;
+
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
     const m = url.pathname.match(/^\/v1\/t\/([0-9a-f]{64})$/);
     if (!m) return new Response(url.pathname === "/" ? "kt cloud mailbox v1" : "not found", { status: url.pathname === "/" ? 200 : 404 });
     if (req.method !== "PUT" && req.method !== "GET") return new Response("method", { status: 405 });
+    // Budgets per network before any object wakes (each wake is billed): sized far above a real household (a
+    // device reads its topics every few rounds), so only a loop hits them. 429 makes the app defer to its other
+    // layers (helpers, relays, direct).
+    const net = netOf(req.headers.get("CF-Connecting-IP"));
+    const limit = req.method === "PUT" ? env.WRITES : env.READS;
+    if (limit && !(await limit.limit({ key: net })).success) return new Response("slow down", { status: 429, headers: { "Retry-After": "60" } });
+    if (req.method === "PUT") {
+      const cl = req.headers.get("Content-Length");
+      if (cl === null) return new Response("length required", { status: 411 });
+      if (!(Number(cl) <= MAX_BODY)) return new Response("too large", { status: 413 });
+    }
     const stub = env.TOPICS.get(env.TOPICS.idFromName(m[1]));
     return stub.fetch(req);
   },
@@ -80,6 +104,14 @@ export class Topic extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
+  }
+
+  // Tables are made by the first accepted write only: a read of a topic nobody wrote leaves nothing stored.
+  exists() {
+    return this.sql.exec(`SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'slots'`).one().n > 0;
+  }
+
+  create() {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS slots (writer BLOB PRIMARY KEY, version INTEGER, rev INTEGER, refreshed INTEGER, blob BLOB)`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v INTEGER)`);
   }
@@ -115,6 +147,12 @@ export class Topic extends DurableObject {
     } catch (_) {}
     if (!ok) return new Response("bad signature", { status: 400 });
 
+    const fresh = !this.exists();
+    if (fresh) {
+      const pow = await sha256(concat(enc.encode("kt/cloud-pow/v1"), topic, writer, u64(version), u64(nonce)));
+      if (leadingZeros(pow) < POW_BITS) return new Response("proof of work", { status: 428, headers: { "X-Pow-Bits": String(POW_BITS) } });
+      this.create();
+    }
     const old = this.sql.exec(`SELECT version, length(blob) AS n FROM slots WHERE writer = ?`, writer).toArray()[0];
     if (old && BigInt(old.version) >= version) return new Response("stale");
     if (!old) {
@@ -133,6 +171,7 @@ export class Topic extends DurableObject {
   }
 
   get(after) {
+    if (!this.exists()) return new Response(u64(0), { headers: { "Content-Type": "application/octet-stream" } });
     const rows = this.sql.exec(`SELECT writer, version, rev, blob FROM slots WHERE rev > ? ORDER BY rev`, after).toArray();
     const parts = [u64(this.rev())];
     for (const r of rows) {
@@ -146,6 +185,7 @@ export class Topic extends DurableObject {
 
   // Daily: drop slots nobody refreshed for 14 days; an empty topic deletes itself.
   async alarm() {
+    if (!this.exists()) return void (await this.ctx.storage.deleteAll());
     this.sql.exec(`DELETE FROM slots WHERE refreshed < ?`, Date.now() - TTL_MS);
     if (this.sql.exec(`SELECT count(*) AS n FROM slots`).one().n === 0) {
       await this.ctx.storage.deleteAll();

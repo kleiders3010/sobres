@@ -68,7 +68,7 @@ pub(super) fn copy_list(r: &mut Replica, from: &GroupId, d: &DocId, to: &GroupId
 fn device_names(r: &Replica, meta: &AppMeta) -> std::collections::BTreeMap<String, String> {
     let Some(p) = r.doc(&meta.personal, &meta.profile) else { return Default::default() };
     match p.get_map("devices").get_deep_value() {
-        LoroValue::Map(m) => m.iter().filter_map(|(k, v)| if let LoroValue::String(s) = v { Some((k.clone(), s.to_string())) } else { None }).collect(),
+        LoroValue::Map(m) => m.iter().filter_map(|(k, v)| if let LoroValue::String(s) = v { Some((k.clone(), crate::clean_name(s))) } else { None }).collect(),
         _ => Default::default(),
     }
 }

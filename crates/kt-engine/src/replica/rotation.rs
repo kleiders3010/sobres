@@ -42,7 +42,9 @@ impl Replica {
             let mine = crypto::hash("kt/rotate-turn/v1", &[head.0.as_slice(), me.0.as_slice()].concat());
             let rank = order.iter().position(|h| *h == mine).unwrap_or(0) as u64;
             let wait = self.rotate_after_ms.saturating_add(rank * ROTATE_CASCADE_MS);
-            if now.saturating_sub(rec.body.created_ms) >= wait {
+            // Someone else removed a device and nobody but the remover has built on it yet: the first other member
+            // confirms it now, so the removed device can't undo it from an older branch (epochs.rs, T2).
+            if now.saturating_sub(rec.body.created_ms) >= wait || state.epochs.removal_to_confirm(&me) {
                 due.push(*g);
             }
         }

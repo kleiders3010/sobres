@@ -202,7 +202,7 @@ impl Manifest {
             if !resp.status().is_success() {
                 continue;
             }
-            if let Ok(b) = resp.bytes().await {
+            if let Some(b) = crate::http::bytes_capped(resp, 1024 * 1024).await {
                 if self.consider(&b) {
                     accepted += 1;
                 }

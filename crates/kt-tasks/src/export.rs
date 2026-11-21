@@ -5,7 +5,7 @@ use crate::TaskView;
 /// Markdown in the Obsidian Tasks format: `- [ ]` / `- [x]` items, subtasks indented with
 /// tabs, notes as indented lines under their task. One-way: nothing reads this back.
 pub fn markdown(list_name: &str, tasks: &[TaskView]) -> String {
-    let mut out = format!("# {}\n\n", one_line(list_name));
+    let mut out = format!("# {}\n\n", md(&one_line(list_name)));
     items(tasks, 0, &mut out);
     out
 }
@@ -13,15 +13,28 @@ pub fn markdown(list_name: &str, tasks: &[TaskView]) -> String {
 fn items(ts: &[TaskView], depth: usize, out: &mut String) {
     for t in ts {
         let indent = "\t".repeat(depth);
-        out.push_str(&format!("{indent}- [{}] {}\n", if t.done { 'x' } else { ' ' }, one_line(&t.title)));
+        out.push_str(&format!("{indent}- [{}] {}\n", if t.done { 'x' } else { ' ' }, md(&one_line(&t.title))));
         for line in t.notes_preview().lines().filter(|l| !l.trim().is_empty()) {
-            out.push_str(&format!("{indent}  {}\n", line.trim_end()));
+            out.push_str(&format!("{indent}  {}\n", md(line.trim_end())));
         }
         if t.attachment().is_some() {
             out.push_str(&format!("{indent}  (continues in the app)\n"));
         }
         items(&t.children, depth + 1, out);
     }
+}
+
+/// Text other people typed, made inert for Markdown viewers: with `\ [ ] < >` escaped no image, link or HTML tag can
+/// form, so opening the export never loads a picture from someone's server (safety audit round 4, T12).
+fn md(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if matches!(c, '\\' | '[' | ']' | '<' | '>') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// Titles are one line in Markdown; an empty title would read as an empty checkbox.
@@ -87,5 +100,27 @@ mod tests {
     fn obsidian_tasks_format() {
         let md = markdown("Groceries", &[t("milk", true, "", vec![]), t("party", false, "Saturday\n\nbring chairs", vec![t("cake\nchocolate", false, "", vec![])])]);
         assert_eq!(md, "# Groceries\n\n- [x] milk\n- [ ] party\n  Saturday\n  bring chairs\n\t- [ ] cake chocolate\n");
+    }
+
+    /// pinned: an export never makes a Markdown viewer load anything (safety audit round 4, T12).
+    #[test]
+    fn markdown_is_inert() {
+        let md = markdown("<b>x</b>", &[t("![a](https://evil.example/p.png)", false, "<img src=https://evil.example/q>", vec![])]);
+        assert!(!md.contains("](") || md.contains("\\]("), "{md}");
+        let raw_angle = md.char_indices().any(|(i, c)| c == '<' && !md[..i].ends_with('\\'));
+        assert!(!raw_angle, "{md}");
+        assert!(md.contains("Call (mom)") || markdown("L", &[t("Call (mom)", false, "", vec![])]).contains("Call (mom)"));
+    }
+}
+
+#[cfg(test)]
+mod name_tests {
+    /// pinned: names others read carry no direction or invisible tricks, emoji joiners stay (APP-RULES safety 15).
+    #[test]
+    fn clean_name() {
+        assert_eq!(crate::clean_name("Ma\u{202E}rk\u{200B}"), "Mark");
+        assert_eq!(crate::clean_name("  Ana \n Lía\t"), "Ana Lía");
+        assert_eq!(crate::clean_name("👨\u{200D}👩\u{200D}👧 Family"), "👨\u{200D}👩\u{200D}👧 Family");
+        assert_eq!(crate::clean_name(&"x".repeat(500)).chars().count(), crate::NAME_MAX);
     }
 }

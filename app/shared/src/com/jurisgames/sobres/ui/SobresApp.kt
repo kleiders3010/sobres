@@ -272,7 +272,9 @@ private fun Home(env: Env, openedCode: String?) {
         Dialog.Join -> JoinDialog(env, opened?.takeIf { !it.contains("/link") }, onJoined = { name ->
             node.lists().lastOrNull { it.groupName == name }?.let(::open)
         }, onClose = { dialog = null })
-        Dialog.LinkThis -> LinkThisDialog(env, opened?.takeIf { it.contains("/link") }, scope) { dialog = null }
+        // A device link never comes prefilled from a link: linking hands over every budget, so the code is typed or
+        // scanned here, from the other device's own screen (safety audit round 4, T6).
+        Dialog.LinkThis -> LinkThisDialog(env, opened?.contains("/link") == true, scope) { dialog = null }
         Dialog.LinkCode -> runCatching { node.linkCode() }.getOrNull()?.let { info ->
             CodeDialog(tr("Link a device"), tr("On your other device, open ☰ › Link this device, then enter this code or scan it."), info, env.onShare) { dialog = null }
         }
@@ -283,7 +285,7 @@ private fun Home(env: Env, openedCode: String?) {
         Dialog.Feedback -> FeedbackDialog(node, onSent = { dialog = null; scope.launch { snackbar.showSnackbar(tr("Thanks! Your message was sent.")) } }, onClose = { dialog = null })
         null -> {}
     }
-    invite?.let { (name, info) -> CodeDialog(tr("Invite to {name}", "name" to name), tr("Anyone with this link or code can join."), info, env.onShare) { invite = null } }
+    invite?.let { (name, info) -> CodeDialog(tr("Invite to {name}", "name" to name), tr("Anyone with this link or code can open this budget and join, until it expires. Share it only with the people you invite."), info, env.onShare) { invite = null } }
 }
 
 class MenuActions(val join: () -> Unit, val linkThis: () -> Unit, val linkCode: () -> Unit, val settings: () -> Unit, val feedback: () -> Unit)
@@ -452,9 +454,9 @@ private fun CodeDialog(title: String, hint: String, info: InviteInfo, onShare: (
 }
 
 @Composable
-private fun LinkThisDialog(env: Env, prefilled: String?, scope: CoroutineScope, onClose: () -> Unit) {
+private fun LinkThisDialog(env: Env, fromLink: Boolean, scope: CoroutineScope, onClose: () -> Unit) {
     val node = env.node
-    var words by remember { mutableStateOf(prefilled ?: "") }
+    var words by remember { mutableStateOf("") }
     var preview by remember { mutableStateOf<String?>(null) }
     var result by remember { mutableStateOf("") }
     val ownLists = remember(node, env.version) { node.lists().size }
@@ -467,7 +469,10 @@ private fun LinkThisDialog(env: Env, prefilled: String?, scope: CoroutineScope, 
                     scope.launch {
                         try {
                             val p = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { node.linkPreview(words) }
-                            preview = tr("This joins {name}'s lists: {summary}", "name" to p.accountName, "summary" to trSummary(p.summary)) + when (ownLists) {
+                            // Fixed words say what is handed over; the other side's own name and summary are shown as
+                            // theirs (in quotes), never as the app's wording.
+                            preview = tr("Linking gives that device everything: all the budgets on this device, and a place in every budget you share. Only go on if you made this code yourself on your other device.") +
+                                "\n" + tr("It calls itself “{name}” ({summary})", "name" to p.accountName, "summary" to trSummary(p.summary)) + when (ownLists) {
                                 0 -> "."
                                 1 -> tr(". The list on this device is added to them.")
                                 else -> tr(". The {n} lists on this device are added to them.", "n" to ownLists)
@@ -496,6 +501,7 @@ private fun LinkThisDialog(env: Env, prefilled: String?, scope: CoroutineScope, 
         title = { Text(tr("Link this device")) },
         text = {
             Column {
+                if (fromLink) Text(tr("For safety, a device is linked only with the code shown on your other device: type it or scan it here."), modifier = Modifier.testTag("linkFromLink"))
                 OutlinedTextField(words, { words = it; preview = null }, label = { Text(tr("Code or link from your other device")) }, modifier = Modifier.testTag("linkThisWords"))
                 env.onScan?.let { scan -> TextButton(onClick = { scan { words = it; preview = null } }, modifier = Modifier.testTag("scanLink")) { Text(tr("Scan QR code")) } }
                 preview?.let { Text(it, modifier = Modifier.testTag("linkPreview")) }

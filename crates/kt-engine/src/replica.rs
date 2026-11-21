@@ -418,7 +418,13 @@ impl Replica {
         let peer = peer_id_for(&device);
         let cutoffs = state.docs.iter().map(|(d, s)| (*d, s.doc.oplog_vv().get(&peer).copied().unwrap_or(0))).collect();
         let rec = state.epochs.create_remove(&self.identity, device, cutoffs)?;
-        self.insert_epoch(*g, rec, true)
+        self.insert_epoch(*g, rec, true)?;
+        // Build on the removal at once (a fresh key on top of it): from then on a removal the removed device signs
+        // on an older branch is refused (epochs.rs), instead of working whenever it arrives.
+        if self.groups[g].epochs.head().is_some() {
+            self.rotate(g)?;
+        }
+        Ok(())
     }
 
     pub fn rotate(&mut self, g: &GroupId) -> Result<()> {

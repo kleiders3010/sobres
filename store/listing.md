@@ -24,7 +24,7 @@ you spend in a few taps, and everyone in the budget sees the same balances on th
 • Share with a link, QR code or 8 words. Two people can spend at the same time, even offline: nothing is lost or
   counted twice
 • No account, no device limit, no ads, no bank logins
-• Your budget stays on your devices and travels between them end-to-end encrypted
+• Your budget lives on your devices and travels between them end-to-end encrypted (relays and our small mailbox carry only encrypted copies)
 • Open source (Apache-2.0); also on Windows
 • English and Spanish
 
@@ -52,7 +52,7 @@ Gustos, un viaje), anotá lo que gastás en pocos toques, y todos en el presupue
 • Compartí con un enlace, un código QR u 8 palabras. Dos personas pueden gastar a la vez, incluso sin conexión: nada se
   pierde ni se cuenta dos veces
 • Sin cuenta, sin límite de dispositivos, sin anuncios, sin claves del banco
-• Tu presupuesto queda en tus dispositivos y viaja entre ellos cifrado de punta a punta
+• Tu presupuesto vive en tus dispositivos y viaja entre ellos cifrado de punta a punta (los relays y nuestro pequeño buzón llevan solo copias cifradas)
 • Código abierto (Apache-2.0); también en Windows
 • Español e inglés
 

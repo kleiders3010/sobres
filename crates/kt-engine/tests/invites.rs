@@ -223,3 +223,69 @@ fn keys_rotate_periodically_without_closing_invites() {
     assert!(value(&c, &g, &d).contains("before") && value(&c, &g, &d).contains("after"), "with the whole history");
 }
 
+/// Safety audit round 4, T3: an invite planted by a member before they are removed must not keep handing out the
+/// current key. pinned: an invite closes when its maker is no longer a member.
+#[test]
+fn invite_closes_when_its_maker_is_removed() {
+    let mut net = Net::default();
+    let (mut a, mut b) = (dev("ma"), dev("mb"));
+    let g = a.create_group().unwrap();
+    a.add_member(&g, b.device_public()).unwrap();
+    b.accept_group(g);
+    for m in a.export_group(&g).unwrap() {
+        let _ = b.receive(&m);
+    }
+    net.sync(&mut [&mut a, &mut b]);
+    let (code, _) = b.create_invite(&g, CodeKind::Invite, MONTH).unwrap();
+    net.sync(&mut [&mut a, &mut b]);
+    let id = code.id();
+    assert!(a.invites(&g).iter().any(|i| i.id() == id && a.invite_is_open(i)), "a learnt the invite while b was in");
+    a.remove_member(&g, b.device_id()).unwrap();
+    assert!(a.invites(&g).iter().filter(|i| i.id() == id).all(|i| !a.invite_is_open(i)), "closed once its maker is out");
+    let published = a.invite_publications(DAY, &|_| ("Family".into(), "Alex".into())).unwrap();
+    assert!(published.is_empty(), "a no longer publishes the key under it");
+}
+
+/// Safety audit round 4, T2 end to end: A removes C, B confirms on its next background round, and a removal C
+/// signs afterwards from the old state changes nothing. pinned: removal is final against the removed party.
+#[test]
+fn late_removal_by_removed_device_changes_nothing() {
+    let mut net = Net::default();
+    let (mut a, mut b, mut c) = (dev("xa"), dev("xb"), dev("xc"));
+    let g = a.create_group().unwrap();
+    for x in [&mut b, &mut c] {
+        a.add_member(&g, x.device_public()).unwrap();
+        x.accept_group(g);
+    }
+    for m in a.export_group(&g).unwrap() {
+        let _ = b.receive(&m);
+        let _ = c.receive(&m);
+    }
+    net.sync(&mut [&mut a, &mut b, &mut c]);
+    for x in [&mut a, &mut b, &mut c] {
+        x.set_rotation_interval_ms(u64::MAX);
+    }
+    a.remove_member(&g, c.device_id()).unwrap();
+    net.sync(&mut [&mut a, &mut b]);
+    assert_eq!(b.auto_rotate().unwrap(), vec![g], "b confirms the removal");
+    net.sync(&mut [&mut a, &mut b]);
+    assert!(b.auto_rotate().unwrap().is_empty(), "once");
+    c.remove_member(&g, a.device_id()).unwrap(); // c never saw its removal: signs from the old head
+    net.sync(&mut [&mut a, &mut b, &mut c]);
+    for x in [&a, &b] {
+        let e = x.epochs(&g).unwrap();
+        assert!(e.is_current_member(&a.device_id()) && e.is_current_member(&b.device_id()));
+        assert!(!e.is_current_member(&c.device_id()));
+    }
+}
+
+/// The longest life an invite asks for is cut to 30 days. pinned: invites live at most 30 days.
+#[test]
+fn invites_live_at_most_30_days() {
+    let mut a = dev("la");
+    let g = a.create_group().unwrap();
+    let (_, expires) = a.create_invite(&g, CodeKind::Invite, 3650 * 86_400_000).unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+    assert!(expires <= now + MONTH + 1000);
+}
+

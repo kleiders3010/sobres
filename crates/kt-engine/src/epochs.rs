@@ -19,8 +19,10 @@
 //!    ops beyond the cutoff, and the post-removal document epoch is rebuilt at the cutoff,
 //!    so all members converge even if some imported late ops before learning of the removal.
 //!
-//! Mutual removal (A removes B while B removes A) removes both: removal epochs are never
-//! invalidated by a concurrent removal of their creator.
+//! Mutual removal (A removes B while B removes A) removes both, but only while it really is
+//! concurrent: once a member other than the removed device has built an epoch on top of a
+//! removal, a removal signed by the removed device on an older branch is invalid (it would
+//! otherwise work months later). A group has one genesis: a second parentless record is refused.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -223,6 +225,12 @@ impl GroupEpochs {
             if b.kind != EpochKind::Genesis || !b.removed.is_empty() || !b.recipients.contains_key(&b.creator) {
                 return bad("invalid genesis");
             }
+            // One founding record per group: the first one this device accepted is pinned, any other is refused on
+            // every path. A second genesis would let anyone who ever held a key of the group start a branch of
+            // their own (dead list, or a branch with more members that everyone then encrypts to).
+            if self.records.values().any(|r| r.body.parents.is_empty()) {
+                return bad("second genesis for a group that already has one");
+            }
             return Ok(());
         }
         let parents: Vec<&EpochRecord> = b.parents.iter().map(|p| &self.records[p]).collect();
@@ -335,7 +343,36 @@ impl GroupEpochs {
                         })
                 }
                 EpochKind::Rotate | EpochKind::Merge => removes_creator_elsewhere,
-                EpochKind::Remove { .. } | EpochKind::Genesis => false,
+                // A removal by a device that is itself removed elsewhere stands only while nobody else has built on
+                // that other removal (true concurrency: both go). Once another member, not removed by anything
+                // concurrent, made an epoch after it, the removed device's late removal is refused: otherwise it
+                // could throw people out months later from an old branch.
+                // "Built on" = an epoch y after x (not after this one) whose creator this removal does not itself
+                // remove, who is not this removal's creator, and whom no other concurrent removal (one not made by
+                // this creator, not on this branch) removes.
+                EpochKind::Remove { .. } => base.iter().any(|x| {
+                    x != e
+                        && !ancestors[x].contains(e)
+                        && !ancestors[e].contains(x)
+                        && self.records[x].body.removed.contains(&creator)
+                        && base.iter().any(|y| {
+                            let by = self.records[y].body.creator;
+                            ancestors[y].contains(x)
+                                && !ancestors[y].contains(e)
+                                && by != creator
+                                && !r.body.removed.contains(&by)
+                                && !base.iter().any(|z| {
+                                    z != x
+                                        && z != e
+                                        && !ancestors[z].contains(e)
+                                        && self.records[z].body.creator != creator
+                                        && !ancestors[z].contains(x)
+                                        && !ancestors[x].contains(z)
+                                        && self.records[z].body.removed.contains(&by)
+                                })
+                        })
+                }),
+                EpochKind::Genesis => false,
             };
             if invalid_here {
                 invalid.insert(*e);
@@ -412,6 +449,24 @@ impl GroupEpochs {
     /// Devices removed as known across all valid epochs.
     pub fn removed_devices(&self) -> BTreeSet<DeviceId> {
         self.valid.iter().flat_map(|e| self.records[e].body.removed.iter().copied()).collect()
+    }
+
+    /// Whether `me` should confirm a removal now: on the way to the single head there is a removal made by someone
+    /// else, `me` is the first of its remaining members other than its creator, and no epoch after it was made by
+    /// anyone but that creator.
+    pub fn removal_to_confirm(&self, me: &DeviceId) -> bool {
+        let Some(head) = self.head() else { return false };
+        let mut line = self.ancestors_of(&head);
+        line.insert(head);
+        line.iter().any(|r| {
+            let rec = &self.records[r];
+            matches!(rec.body.kind, EpochKind::Remove { .. })
+                && rec.body.creator != *me
+                && rec.body.recipients.keys().find(|d| **d != rec.body.creator) == Some(me)
+                && !line.iter().any(|y| {
+                    y != r && self.ancestors_of(y).contains(r) && self.records[y].body.creator != rec.body.creator
+                })
+        })
     }
 
     /// Is `device` a recipient of the current head(s)?
@@ -632,6 +687,61 @@ mod tests {
         a.insert(add).unwrap();
         assert!(!a.is_current_member(&newcomer.id()), "strong remove: removed device can't add");
         assert_eq!(a.heads().len(), 1);
+    }
+
+    /// Safety audit round 4, T1: anyone who held a group key could send a second genesis and kill the list or start
+    /// a branch everyone then encrypts to. pinned: one founding record per group.
+    #[test]
+    fn second_genesis_refused() {
+        let (ds, mut ge) = setup(3);
+        let g = ge.group().unwrap();
+        let before = ge.head();
+        let attacker = DeviceIdentity::generate();
+        assert!(ge.insert(genesis(&attacker, g)).is_err(), "an outsider's genesis");
+        assert!(ge.insert(genesis(&ds[2], g)).is_err(), "a member's second genesis");
+        assert_eq!(ge.head(), before);
+        assert!(ds.iter().all(|d| ge.is_current_member(&d.id())));
+    }
+
+    /// T2: a removed device signing a removal on the branch where it was still a member. pinned: removal is final
+    /// against the removed party once another member built on it.
+    #[test]
+    fn late_removal_by_removed_device_refused() {
+        // 0 removes 2 and builds on it (Replica::remove_member), 1 confirms (Replica::insert_epoch); 2 then removes
+        // 0, and 1, from the old head
+        let (ds, ge) = setup(3);
+        let old = ge.clone();
+        let mut a = ge.clone();
+        let rm = a.create_remove(&ds[0], ds[2].id(), BTreeMap::new()).unwrap();
+        a.insert(rm).unwrap();
+        let own = a.create_rotate(&ds[0]).unwrap();
+        a.insert(own).unwrap();
+        let ack = a.create_rotate(&ds[1]).unwrap();
+        a.insert(ack).unwrap();
+        let late = old.create_remove(&ds[2], ds[0].id(), BTreeMap::new()).unwrap();
+        let mut after = old.clone();
+        after.insert(late.clone()).unwrap();
+        let chained = after.create_remove(&ds[2], ds[1].id(), BTreeMap::new()).unwrap();
+        let sibling = old.create_remove(&ds[2], ds[1].id(), BTreeMap::new()).unwrap();
+        for r in [late, chained, sibling] {
+            let _ = a.insert(r);
+        }
+        assert!(a.is_current_member(&ds[0].id()) && a.is_current_member(&ds[1].id()), "the remover and the confirmer stay");
+        assert!(!a.is_current_member(&ds[2].id()));
+        assert_eq!(a.heads().len(), 1, "the late removals are invalid, so nothing forks");
+    }
+
+    /// Mutual removal that really is concurrent (nobody built on either yet) still removes both.
+    #[test]
+    fn concurrent_mutual_removal_removes_both() {
+        let (ds, ge) = setup(3);
+        let mut a = ge.clone();
+        let ra = a.create_remove(&ds[0], ds[1].id(), BTreeMap::new()).unwrap();
+        let rb = ge.create_remove(&ds[1], ds[0].id(), BTreeMap::new()).unwrap();
+        a.insert(ra).unwrap();
+        a.insert(rb).unwrap();
+        assert_eq!(a.heads().len(), 2);
+        assert!(!a.is_current_member(&ds[0].id()) && !a.is_current_member(&ds[1].id()));
     }
 
     /// Randomized property test mirroring research E8: concurrent adds/removes with random

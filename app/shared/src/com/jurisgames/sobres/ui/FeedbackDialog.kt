@@ -39,7 +39,13 @@ import java.net.URI
  */
 object Feedback {
     /** Where reports go; tests point it at a local server. */
-    var endpoint = "https://feedback.jurisgames.com/send"
+    const val LIVE = "https://feedback.jurisgames.com/send"
+    /** Tests point it at a server on this computer; any other address is ignored (APP-RULES safety 1). */
+    var endpoint = LIVE
+    private fun target(): String {
+        val host = runCatching { URI(endpoint).host }.getOrNull()
+        return if (endpoint == LIVE || host == "127.0.0.1" || host == "localhost") endpoint else LIVE
+    }
     val kinds = listOf("bug" to "Something isn't working", "idea" to "An idea", "other" to "Something else")
 
     private fun str(s: String) = buildString {
@@ -75,7 +81,7 @@ object Feedback {
 
     /** Sends it; returns null when it went, or a sentence to show. */
     fun send(body: String): String? = try {
-        val c = URI(endpoint).toURL().openConnection() as HttpURLConnection
+        val c = URI(target()).toURL().openConnection() as HttpURLConnection
         c.requestMethod = "POST"
         c.doOutput = true
         c.connectTimeout = 15_000

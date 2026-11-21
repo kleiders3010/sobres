@@ -96,7 +96,21 @@ fn run() -> Result<()> {
             kt_engine::storage::write_atomic(Path::new(out), &signed).context("writing the signed manifest")?;
             println!("signed manifest version {} ({} bytes)", body.version, signed.len());
         }
-        _ => bail!("usage: kt-operator new <keyfile> | pub <keyfile> | sign-manifest <keyfile> <manifest.json> <out.bin>   (password in KT_PW)"),
+        [cmd, file, json, out] if cmd == "sign-update" => {
+            // update.json's signature (update.sig, hex), checked by the apps before they show an update notice.
+            let secret = open_key(&std::fs::read(file)?, &password()?)?;
+            if secret.public().sign != kt_net::manifest::OPERATOR_PUBLIC_KEY {
+                bail!("this key isn't the one the app trusts");
+            }
+            let body = std::fs::read(json).context("reading update.json")?;
+            let sig = hex::encode(secret.sign(&kt_net::update::signed_message(&body)));
+            if !kt_net::update::signature_ok(&body, sig.as_bytes(), &kt_net::manifest::OPERATOR_PUBLIC_KEY) {
+                bail!("the signature didn't check");
+            }
+            kt_engine::storage::write_atomic(Path::new(out), sig.as_bytes()).context("writing update.sig")?;
+            println!("signed {} ({} bytes)", json, body.len());
+        }
+        _ => bail!("usage: kt-operator new <keyfile> | pub <keyfile> | sign-manifest <keyfile> <manifest.json> <out.bin> | sign-update <keyfile> <update.json> <update.sig>   (password in KT_PW)"),
     }
     Ok(())
 }

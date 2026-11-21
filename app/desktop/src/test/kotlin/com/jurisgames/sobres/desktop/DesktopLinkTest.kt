@@ -56,7 +56,8 @@ class DesktopLinkTest {
         rule.onNodeWithTag("linkThisWords").performTextInput(words)
         rule.onNodeWithTag("linkFind").performClick()
         rule.waitUntil(30_000) { rule.onAllNodes(hasTestTag("linkPreview")).fetchSemanticsNodes().isNotEmpty() }
-        rule.onNode(hasTestTag("linkPreview") and hasText("Alex's lists: Pixel 7 · 1 list (Groceries)", substring = true)).assertExists()
+        // The other side's own words are shown as theirs, in quotes, next to fixed words of ours (safety audit round 4, T6).
+        rule.onNode(hasTestTag("linkPreview") and hasText("“Alex” (Pixel 7 · 1 list (Groceries))", substring = true)).assertExists()
         rule.onNodeWithTag("linkGo").performClick()
         rule.waitUntil(30_000) { rule.onAllNodes(hasTestTag("linkResult") and hasText("Linking", substring = true)).fetchSemanticsNodes().isNotEmpty() }
         check(desk.isLinking())

@@ -33,7 +33,7 @@ tokio-websockets = { version = "=0.13.3", features = ["client", "server", "ring"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 nostr = { version = "=0.45.5", features = ["std", "os-rng"] }
 base64 = "0.22"
-rustls = { version = "=0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 http = "1"
 iroh = "=1.2.0"
 mainline = { version = "=8.0.0", default-features = false, features = ["async"] }

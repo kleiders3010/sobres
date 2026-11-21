@@ -28,6 +28,19 @@ use crate::invite::{self, Code, CodeKind, InviteRecord};
 use crate::{wire, Error, Result};
 
 const INVITE_TAG: [u8; 2] = *b"IV";
+
+/// The longest an invite or link code may live (the app offers 1-30 days).
+pub const MAX_INVITE_MS: u64 = 30 * 86_400_000;
+/// How far another device's clock may be ahead of ours.
+const CLOCK_SKEW_MS: u64 = 10 * 60_000;
+
+/// Other people's clocks decide nothing: an invite made "in the future", or living longer than any invite may, is
+/// refused (it would outlive removals and cost every member one Argon2id run per day until its far expiry).
+fn invite_times_ok(inv: &OpenInvite, now: u64) -> bool {
+    inv.created_ms <= now + CLOCK_SKEW_MS
+        && inv.expires_ms <= inv.created_ms.saturating_add(MAX_INVITE_MS + CLOCK_SKEW_MS)
+        && inv.expires_ms <= now.saturating_add(MAX_INVITE_MS + CLOCK_SKEW_MS)
+}
 const JOIN_TAG: [u8; 2] = *b"JR";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,10 +106,15 @@ impl Replica {
 
     /// Whether an invite accepts joiners right now.
     pub fn invite_is_open(&self, inv: &OpenInvite) -> bool {
-        if inv.cancelled || super::now_ms() >= inv.expires_ms {
+        let now = super::now_ms();
+        if inv.cancelled || now >= inv.expires_ms || !invite_times_ok(inv, now) {
             return false;
         }
         let Some(state) = self.groups.get(&inv.group) else { return false };
+        // Its maker removed: closed (an invite planted before leaving must not keep handing out the key).
+        if !state.epochs.is_current_member(&inv.creator) {
+            return false;
+        }
         // A removal after the invite was made closes it. Periodic rotations and additions
         // don't: invites expire within the rotation period anyway.
         !state.epochs.all_records().any(|r| {
@@ -111,6 +129,7 @@ impl Replica {
             return Err(Error::Rejected("only members can invite".into()));
         }
         let now = super::now_ms();
+        let valid_ms = valid_ms.min(MAX_INVITE_MS);
         let inv = OpenInvite { group: *g, code: Code::generate(), kind, created_ms: now, expires_ms: now + valid_ms, creator: self.identity.id(), cancelled: false };
         let mut all = self.invites(g);
         all.push(inv.clone());
@@ -163,7 +182,17 @@ impl Replica {
                     return Ok(());
                 }
             }
-            None => all.push(inv.clone()),
+            None => {
+                // A new invite is learnt only from its maker, with times this clock accepts: not made in the
+                // future, not living longer than any invite may. (Others carry known invites and cancellations.)
+                if s.author != inv.creator {
+                    return Err(Error::Rejected("invite record not from its maker".into()));
+                }
+                if !invite_times_ok(&inv, super::now_ms()) {
+                    return Err(Error::Rejected("invite times out of bounds".into()));
+                }
+                all.push(inv.clone())
+            }
         }
         self.save_invites(&inv.group, &all)
     }
@@ -255,7 +284,8 @@ impl Replica {
             let done = self.ahead_done(&g);
             let open: Vec<OpenInvite> = self.invites(&g).into_iter().filter(|i| self.invite_is_open(i)).collect();
             for inv in open {
-                let last_day = invite::day_of(inv.expires_ms);
+                // Never more than an invite's longest life ahead (one Argon2id run per day).
+                let last_day = invite::day_of(inv.expires_ms).min(today + (MAX_INVITE_MS / 86_400_000) as u32 + 1);
                 for day in today..=last_day {
                     if done.contains(&(inv.id(), day)) {
                         continue;

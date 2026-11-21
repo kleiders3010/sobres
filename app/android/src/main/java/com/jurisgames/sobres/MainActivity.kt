@@ -30,7 +30,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge() // the app draws behind the status and navigation bars and pads itself
         super.onCreate(savedInstanceState)
-        opened.value = intent?.dataString
+        opened.value = ourLink(intent)
         QrScanner.prepare(this) // play: fetch Google's scanner module before anyone taps Scan
         setContent {
             var node by remember { mutableStateOf(app.node) }
@@ -143,7 +143,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        opened.value = intent.dataString
+        opened.value = ourLink(intent)
+    }
+
+    /** Only a VIEW of one of our own join / link pages is taken from an intent (any app can send one). */
+    private fun ourLink(intent: Intent?): String? {
+        if (intent?.action != Intent.ACTION_VIEW) return null
+        val text = intent.dataString?.trim() ?: return null
+        return text.takeIf { INVITE_LINK.matches(it) }
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {

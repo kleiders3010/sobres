@@ -246,7 +246,8 @@ impl Mailbox for CloudMailbox {
                 let after = self.cache.lock().expect("lock").get(t).map(|c| c.0).unwrap_or(0);
                 let r = self.client.get(format!("{}?after={after}", self.url(t))).timeout(READ_TIMEOUT).send().await.ok()?;
                 let ok = r.status().is_success();
-                let b = r.bytes().await.ok()?;
+                // A topic holds at most 2 MB of slots plus their headers.
+                let b = crate::http::bytes_capped(r, 3 * 1024 * 1024).await?;
                 Some((*t, ok.then_some(b)))
             }))
             .await;

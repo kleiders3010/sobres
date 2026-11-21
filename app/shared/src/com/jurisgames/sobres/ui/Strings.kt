@@ -227,7 +227,8 @@ val ES: Map<String, String> = mapOf(
     "On your other device, open ☰ › Link this device, then enter this code or scan it." to
         "En tu otro dispositivo abrí ☰ › Vincular este dispositivo y escribí este código o escanealo.",
     "Invite to {name}" to "Invitar a {name}",
-    "Anyone with this link or code can join." to "Cualquiera con este enlace o código puede unirse.",
+    "Anyone with this link or code can open this budget and join, until it expires. Share it only with the people you invite." to
+        "Cualquiera con este enlace o código puede abrir este presupuesto y unirse, hasta que venza. Compartilo solo con quienes invitás.",
     "Your name" to "Tu nombre",
     "Linking: this device joins your other one as soon as it's online" to "Vinculando: este dispositivo se une al otro apenas esté conectado",
     "Your devices ({n}) · Add a device" to "Tus dispositivos ({n}) · Agregar uno",
@@ -258,6 +259,11 @@ val ES: Map<String, String> = mapOf(
     "Works until {date}" to "Sirve hasta el {date}",
     "Looking…" to "Buscando…",
     "This joins {name}'s lists: {summary}" to "Esto se une a las listas de {name}: {summary}",
+    "Linking gives that device everything: all the budgets on this device, and a place in every budget you share. Only go on if you made this code yourself on your other device." to
+        "Vincular le da todo a ese dispositivo: todos los presupuestos de este dispositivo y un lugar en cada presupuesto que compartís. Seguí solo si hiciste este código vos en tu otro dispositivo.",
+    "It calls itself “{name}” ({summary})" to "Se llama a sí mismo “{name}” ({summary})",
+    "For safety, a device is linked only with the code shown on your other device: type it or scan it here." to
+        "Por seguridad, un dispositivo se vincula solo con el código que muestra tu otro dispositivo: escribilo o escanealo acá.",
     ". The list on this device is added to them." to ". La lista de este dispositivo se suma a ellas.",
     ". The {n} lists on this device are added to them." to ". Las {n} listas de este dispositivo se suman a ellas.",
     "That code didn't work. Check it on your other device." to "Ese código no funcionó. Revisalo en tu otro dispositivo.",

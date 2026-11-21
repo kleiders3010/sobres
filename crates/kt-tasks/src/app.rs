@@ -113,7 +113,7 @@ fn groups_of(r: &Replica, personal: GroupId) -> Vec<GroupInfo> {
         .into_iter()
         .filter_map(|g| {
             let gd = group_doc(r, &g)?;
-            let name = r.doc(&g, &gd).and_then(|d| str_of(d.get_map("meta").get("name"))).unwrap_or_default();
+            let name = crate::clean_name(&r.doc(&g, &gd).and_then(|d| str_of(d.get_map("meta").get("name"))).unwrap_or_default());
             Some(GroupInfo { group: g, name, personal: g == personal })
         })
         .collect();
@@ -213,7 +213,7 @@ impl App {
     pub fn set_display_name(&self, name: &str) -> Result<()> {
         let mut r = self.lock();
         let (g, d) = (self.meta().personal, self.meta().profile);
-        r.doc(&g, &d).ok_or(Error::NotFound)?.get_map("profile").insert("name", name).map_err(eng)?;
+        r.doc(&g, &d).ok_or(Error::NotFound)?.get_map("profile").insert("name", crate::clean_name(name).as_str()).map_err(eng)?;
         r.commit(&g, &d).map_err(eng)
     }
 

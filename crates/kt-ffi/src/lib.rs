@@ -661,6 +661,8 @@ const MANIFEST_EVERY: Duration = Duration::from_secs(24 * 3600);
 
 #[derive(uniffi::Object)]
 pub struct KtNode {
+    /// The device key is sealed by the system key store (false: the store failed and it is a plain file).
+    key_in_store: bool,
     app: App,
     rt: tokio::runtime::Runtime,
     net: Net,
@@ -1097,6 +1099,7 @@ impl KtNode {
         }
         let backup_dir = (!options.backup_dir.is_empty()).then(|| PathBuf::from(&options.backup_dir));
         let node = Arc::new(KtNode {
+            key_in_store: identity.join("device.sealed").exists(),
             app,
             rt,
             net,
@@ -1509,7 +1512,7 @@ impl KtNode {
             };
             let joined = kt_net::invite_net::join(&self.net.syncer, self.net.p2p.as_ref(), &rec).await.map_err(fail)?;
             self.net.syncer.sync_once().await;
-            Ok(JoinResult { group_name: rec.group_name, inviter_name: rec.inviter_name, joined, still_looking: false })
+            Ok(JoinResult { group_name: kt_tasks::clean_name(&rec.group_name), inviter_name: kt_tasks::clean_name(&rec.inviter_name), joined, still_looking: false })
         })
     }
 
@@ -1720,7 +1723,8 @@ impl KtNode {
                 None => Err(fail("no link code found for these words: check them, or it may have expired")),
             }
         })?;
-        let preview = LinkPreview { account_name: rec.inviter_name.clone(), summary: rec.group_name.clone() };
+        // The other side wrote these: cleaned like every name (no direction or invisible tricks).
+        let preview = LinkPreview { account_name: kt_tasks::clean_name(&rec.inviter_name), summary: kt_tasks::clean_name(&rec.group_name) };
         *self.previewed.lock().expect("lock") = Some((code.to_text(), rec));
         Ok(preview)
     }
@@ -1902,6 +1906,12 @@ impl KtNode {
         let relays = self.relay_stats();
         let working = relays.iter().filter(|r| r.failures_in_a_row < 3).count();
         let mut layers = vec![LayerStatus { name: "Nostr relays".into(), state: format!("{working} of {} working", relays.len()) }];
+        // Said plainly when the system key store failed (safety audit round 4, T15d): then another program running
+        // as this user could copy the device key.
+        layers.push(LayerStatus {
+            name: "Device key".into(),
+            state: if self.key_in_store { "in the system key store".into() } else { "a plain file (the system key store failed on this device)".into() },
+        });
         let p2p = self.net.p2p.as_ref();
         layers.push(LayerStatus {
             name: "Direct connections".into(),

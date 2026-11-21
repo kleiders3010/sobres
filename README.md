@@ -2,8 +2,8 @@
 
 A free, open-source envelope budget for Android and Windows, made to be shared by a couple, a family or a flat.
 Give every bit of money a job ("envelopes"), record what you spend in a few taps, and everyone in the budget sees the
-same numbers on their own phone. No account, no subscription, no device limit, no bank logins, no company server
-holding your money data.
+same numbers on their own phone. No account, no subscription, no device limit, no bank logins. Our small mailbox server
+only ever holds encrypted copies (for 14 days), and the app works without it.
 
 - **Envelopes:** each with a monthly amount, a yearly one (set aside a twelfth each month) or a goal by a date
   (split over the months left). Group them under headings. A bar shows what is left; an envelope says whether you are

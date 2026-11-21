@@ -190,11 +190,20 @@ impl Replica {
             for h in &heads {
                 push(*h, SlotRole::Main);
             }
-            for h in &heads {
-                let Some(rec) = state.epochs.record(h) else { continue };
+            // Forward under the parents of every recent epoch on the way back from the heads, not only the heads'
+            // own parents: after two quick changes (a removal and its fresh key) a member still listening two
+            // steps back must hear of both.
+            let mut stack: Vec<EpochId> = heads.clone();
+            let mut seen: std::collections::BTreeSet<EpochId> = std::collections::BTreeSet::new();
+            while let Some(e) = stack.pop() {
+                if !seen.insert(e) {
+                    continue;
+                }
+                let Some(rec) = state.epochs.record(&e) else { continue };
                 if now.saturating_sub(rec.body.created_ms) < FORWARD_WINDOW_MS {
                     for p in &rec.body.parents {
                         push(*p, SlotRole::Forward);
+                        stack.push(*p);
                     }
                 }
             }

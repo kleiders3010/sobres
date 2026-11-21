@@ -193,7 +193,27 @@ pub fn init_list(doc: &LoroDoc, name: &str) -> Result<()> {
 }
 
 pub fn list_name(doc: &LoroDoc) -> String {
-    get_str(&doc.get_map("meta"), "name").unwrap_or_default()
+    clean_name(&get_str(&doc.get_map("meta"), "name").unwrap_or_default())
+}
+
+/// The longest name kept (a person, list or group), in characters.
+pub const NAME_MAX: usize = 80;
+
+/// A name other people will read (APP-RULES safety 15): control, direction-changing and invisible characters go,
+/// so nobody can pose as someone else in "X joined" or an assignee; emoji joiners stay (family and flag emoji),
+/// runs of spaces become one, and it is cut to [`NAME_MAX`]. Applied where names are written and read.
+pub fn clean_name(s: &str) -> String {
+    let kept: String = s
+        .chars()
+        .map(|c| if c == '\n' || c == '\r' || c == '\t' { ' ' } else { c })
+        .filter(|c| {
+            !c.is_control()
+                && !matches!(*c,
+                    '\u{061C}' | '\u{200B}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}'
+                    | '\u{2066}'..='\u{2069}' | '\u{FEFF}' | '\u{180E}' | '\u{00AD}')
+        })
+        .collect();
+    kept.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(NAME_MAX).collect()
 }
 
 pub fn rename_list(doc: &LoroDoc, name: &str) -> Result<()> {

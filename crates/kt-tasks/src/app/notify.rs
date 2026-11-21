@@ -59,7 +59,11 @@ const NAME_WAIT_MS: u64 = 86_400_000;
 pub(super) fn people(r: &kt_engine::replica::Replica, g: &GroupId) -> HashMap<String, String> {
     let Some(d) = group_doc(r, g).and_then(|gd| r.doc(g, &gd)) else { return HashMap::new() };
     match d.get_map("people").get_deep_value() {
-        LoroValue::Map(m) => m.iter().filter_map(|(k, v)| if let LoroValue::String(s) = v { Some((k.clone(), s.to_string())) } else { None }).collect(),
+        LoroValue::Map(m) => m
+            .iter()
+            .filter_map(|(k, v)| if let LoroValue::String(s) = v { Some((k.clone(), crate::clean_name(s))) } else { None })
+            .filter(|(_, s)| !s.is_empty())
+            .collect(),
         _ => HashMap::new(),
     }
 }
