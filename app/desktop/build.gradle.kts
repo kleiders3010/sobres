@@ -49,6 +49,7 @@ tasks.test {
     systemProperty("kt.cli", rustTarget.resolve("kt$exe").absolutePath) // local test relay
     // ScreenshotTest writes PNGs only when asked: gradlew :desktop:test -Pshots=<folder>
     systemProperty("kt.shots", (project.findProperty("shots") as String?) ?: "")
+    systemProperty("kt.shots.store", (project.findProperty("store") as String?) ?: "")
     // The app follows the device language; tests run in English unless asked: -Plang=es
     systemProperty("kt.lang", (project.findProperty("lang") as String?) ?: "en")
 }

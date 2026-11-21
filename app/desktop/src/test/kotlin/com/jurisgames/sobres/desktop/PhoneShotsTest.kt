@@ -26,33 +26,41 @@ import java.nio.file.Files
  */
 @OptIn(ExperimentalTestApi::class)
 class PhoneShotsTest {
+    // -Pstore: Google Play size (1080x1920 at a phone's 2.625 density) instead of the 412x860 review size
+    private val store = System.getProperty("kt.shots.store") == "true"
+    // sample names in the language the shots are taken in (-Plang=es for the Spanish store listing)
+    private val es = System.getProperty("kt.lang") == "es"
+    private fun t(en: String, sp: String) = if (es) sp else en
     private val out = System.getProperty("kt.shots")?.takeIf { it.isNotBlank() }?.let { File(it).apply { mkdirs() } }
 
     @Test
-    fun phone() = runDesktopComposeUiTest(width = 412, height = 860) {
+    fun phone() = runDesktopComposeUiTest(width = if (store) 1080 else 412, height = if (store) 1920 else 860) {
         val home = Files.createTempDirectory("kt-phone").toFile()
         val n = KtNode.open(File(home, "identity").path, File(home, "data").path, System.getProperty("kt.worker"),
             NodeOptions(Platform.DESKTOP, listOf("ws://127.0.0.1:9"), false, false, "127.0.0.1:0", "", ""))
-        val l = n.createList(null, "Home")
+        val l = n.createList(null, t("Home", "Casa"))
         n.setListStyle(l.id, budgetHue(0), 1u, null)
         n.setCurrency(l.id, "$")
-        val bank = n.setAccount(l.id, null, "Bank", "bank", 2_480_00)
-        n.setAccount(l.id, null, "Cash", "cash", 60_00)
+        val bank = n.setAccount(l.id, null, t("Bank", "Banco"), "bank", 2_480_00)
+        n.setAccount(l.id, null, t("Cash", "Efectivo"), "cash", 60_00)
         val envs = listOf(
-            Triple("Groceries", 400_00L, "Food"), Triple("Eating out", 80_00L, "Food"),
-            Triple("Rent", 900_00L, "Bills"), Triple("Phone", 25_00L, "Bills"), Triple("Fun", 60_00L, ""),
+            Triple(t("Groceries", "Supermercado"), 400_00L, t("Food", "Comida")), Triple(t("Eating out", "Salidas"), 80_00L, t("Food", "Comida")),
+            Triple(t("Rent", "Alquiler"), 900_00L, t("Bills", "Cuentas")), Triple(t("Phone", "Celular"), 25_00L, t("Bills", "Cuentas")), Triple(t("Fun", "Gustos"), 60_00L, ""),
         ).map { (name, amt, g) -> n.setEnvelope(l.id, null, name, amt, "m", null, g) }
-        val gifts = n.setEnvelope(l.id, null, "Gifts", 600_00, "y", null, "Saving")
-        n.setEnvelope(l.id, null, "Trip", 1_000_00, "g", java.time.LocalDate.now().plusMonths(8).withDayOfMonth(1).toString(), "Saving")
+        val gifts = n.setEnvelope(l.id, null, t("Gifts", "Regalos"), 600_00, "y", null, t("Saving", "Ahorro"))
+        n.setEnvelope(l.id, null, t("Trip", "Viaje"), 1_000_00, "g", java.time.LocalDate.now().plusMonths(8).withDayOfMonth(1).toString(), t("Saving", "Ahorro"))
         val plan = n.fillPlan(l.id, "add", today())
         n.setTx(l.id, null, TxEdit("fill", today(), plan.sumOf { it.cents }, "", "", "", "", plan))
-        n.setTx(l.id, null, TxEdit("exp", today(), 37_50, bank, "", "Market", "", listOf(PartItem(envs[0], "", 37_50))))
-        n.setTx(l.id, null, TxEdit("exp", today(), 37_45, bank, "", "Phone bill", "", listOf(PartItem(envs[3], "", 37_45))))
-        n.setTx(l.id, null, TxEdit("exp", today(), 22_00, bank, "", "Pizza", "", listOf(PartItem(envs[1], "", 22_00))))
+        n.setTx(l.id, null, TxEdit("exp", today(), 37_50, bank, "", t("Market", "Verdulería"), "", listOf(PartItem(envs[0], "", 37_50))))
+        n.setTx(l.id, null, TxEdit("exp", today(), 37_45, bank, "", t("Phone bill", "Factura del celular"), "", listOf(PartItem(envs[3], "", 37_45))))
+        n.setTx(l.id, null, TxEdit("exp", today(), 22_00, bank, "", t("Pizza", "Pizza"), "", listOf(PartItem(envs[1], "", 22_00))))
         check(gifts.isNotEmpty())
         java.io.File(n.dataDir(), "ui-last-list").writeText(l.id)
-        setContent { SobresApp(n) }
-        waitUntil(timeoutMillis = 5_000) { onAllNodes(hasTestTag("env-Groceries"), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+        setContent {
+            if (store) androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(2.625f)) { SobresApp(n) }
+            else SobresApp(n)
+        }
+        waitUntil(timeoutMillis = 5_000) { onAllNodes(hasTestTag("env-" + t("Groceries", "Supermercado")), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
         check(onAllNodes(hasTestTag("addSpent")).fetchSemanticsNodes().isNotEmpty()) { "the Spent bar is there on a phone" }
         fun shot(name: String) {
             val o = out ?: return
@@ -70,10 +78,10 @@ class PhoneShotsTest {
                 g.drawImage(top, (img.width - top.getWidth(null)) / 2, (img.height - top.getHeight(null)) / 2, null)
             }
             g.dispose()
-            javax.imageio.ImageIO.write(img, "png", File(o, "phone-$name.png"))
+            javax.imageio.ImageIO.write(img, "png", File(o, (if (store) "store-" else "phone-") + "$name.png"))
         }
         shot("1-envelopes")
-        onNodeWithTag("env-Groceries").performClick()
+        onNodeWithTag("env-" + t("Groceries", "Supermercado")).performClick()
         waitUntil(timeoutMillis = 5_000) { onAllNodes(hasTestTag("envPace"), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
         shot("2-envelope")
         onNodeWithTag("envDone").performClick()
