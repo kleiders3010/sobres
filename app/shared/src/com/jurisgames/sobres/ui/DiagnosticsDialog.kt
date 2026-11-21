@@ -28,7 +28,7 @@ private val time = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(Z
 
 /** The diagnostics as plain text: engineering state only, never secrets or task content. */
 fun diagnosticsText(d: Diagnostics): String = buildString {
-    appendLine("Tasks ${d.version} (feature level ${d.featureLevel})")
+    appendLine("Sobres ${d.version} (feature level ${d.featureLevel})")
     appendLine()
     appendLine("Layers")
     d.layers.forEach { appendLine("  ${it.name}: ${it.state}") }

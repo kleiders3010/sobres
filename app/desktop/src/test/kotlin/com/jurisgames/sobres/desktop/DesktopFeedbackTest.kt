@@ -62,7 +62,7 @@ class DesktopFeedbackTest {
         rule.onNodeWithTag("feedbackSee").performClick()
         rule.waitUntil(5_000) { shown("feedbackPreview") }
         val preview = text("feedbackPreview")
-        check("\"app\": \"tasks\"" in preview && "\"kind\": \"idea\"" in preview && "Nostr relays" in preview) { "the preview shows the report with diagnostics:\n$preview" } // pinned: report format
+        check("\"app\": \"sobres\"" in preview && "\"kind\": \"idea\"" in preview && "Nostr relays" in preview) { "the preview shows the report with diagnostics:\n$preview" } // pinned: report format
         check("Secret plans" !in preview && "very private" !in preview) { "no task content in what's sent" }
         rule.onNodeWithTag("feedbackSend").performClick()
         rule.waitUntil(10_000) { shown("feedbackThanks") }

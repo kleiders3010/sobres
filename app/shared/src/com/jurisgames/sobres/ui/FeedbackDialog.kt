@@ -58,7 +58,7 @@ object Feedback {
 
     /** The report as JSON (the endpoint's format), pretty enough to read in "See what's sent". */
     fun json(kind: String, message: String, email: String, version: String, details: String?): String = buildString {
-        append("{\n  \"app\": \"tasks\",\n  \"kind\": ${str(kind)},\n  \"message\": ${str(message.trim())},\n")
+        append("{\n  \"app\": \"sobres\",\n  \"kind\": ${str(kind)},\n  \"message\": ${str(message.trim())},\n")
         append("  \"lang\": ${str(java.util.Locale.getDefault().toLanguageTag())},\n  \"version\": ${str(version)}")
         if (email.isNotBlank()) append(",\n  \"email\": ${str(email.trim())}")
         if (details != null) {
@@ -144,7 +144,7 @@ fun FeedbackDialog(node: KtNode, onSent: () -> Unit, onClose: () -> Unit) {
                     Checkbox(include, { include = it }, modifier = Modifier.testTag("feedbackDetails"))
                     Text(tr("Include technical details"))
                 }
-                Text(tr("Sync state, relays, storage sizes, app version and system. Never your lists, tasks or names."), style = MaterialTheme.typography.bodySmall)
+                Text(tr("Sync state, relays, storage sizes, app version and system. Never your budget, entries or names."), style = MaterialTheme.typography.bodySmall)
                 TextButton(onClick = { preview = !preview }, modifier = Modifier.testTag("feedbackSee")) {
                     Text(if (preview) tr("Hide what's sent") else tr("See what's sent"))
                 }

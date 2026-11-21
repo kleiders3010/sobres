@@ -201,8 +201,8 @@ val ES: Map<String, String> = mapOf(
     "What happened, or what would make it better?" to "¿Qué pasó, o qué la haría mejor?",
     "Your email, if you'd like an answer (optional)" to "Tu email, si querés una respuesta (opcional)",
     "Include technical details" to "Incluir detalles técnicos",
-    "Sync state, relays, storage sizes, app version and system. Never your lists, tasks or names." to
-        "Estado de la sincronización, relays, tamaños guardados, versión de la app y sistema. Nunca tus listas, tareas ni nombres.",
+    "Sync state, relays, storage sizes, app version and system. Never your budget, entries or names." to
+        "Estado de la sincronización, relays, tamaños guardados, versión de la app y sistema. Nunca tu presupuesto, movimientos ni nombres.",
 
     // sharing, joining, linking devices
     "Join a shared list" to "Unirme a una lista compartida",
