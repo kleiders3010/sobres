@@ -1,6 +1,6 @@
 # Google Play listing: Sobres (com.jurisgames.sobres)
 
-Play rules kept: no price or promo words ("free", "best", "#1") in the title, short description or feature graphic.
+Play rules kept: no price or promo words in the title, short description or feature graphic, and the length limits (SelfSustainment/tools/play_listing_check.py checks both).
 
 ## en-US
 **Title (≤30):** Sobres: shared budget
@@ -33,7 +33,7 @@ Sobres doesn't connect to banks: you type what you spend, which is the point of 
 ## es-419
 **Título (≤30):** Sobres: presupuesto compartido
 
-**Descripción breve (≤80):** Presupuesto por sobres para parejas y familias. Los mismos números en cada celular.
+**Descripción breve (≤80):** Presupuesto por sobres en pareja o en familia: los mismos saldos en cada celular
 
 **Descripción completa:**
 Dale un destino a cada peso y compartí el plan con la gente con la que vivís.
