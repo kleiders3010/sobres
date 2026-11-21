@@ -79,4 +79,19 @@ class DesktopFeedbackTest {
         server.stop(0)
         n.close()
     }
+
+    /** pinned: "Send feedback" is in the menu itself, one tap away (Kleider, 2026-11-21: "Make sure users always have an
+     *  easy way to give feedback or report bugs on ALL our apps"). */
+    @Test
+    fun feedbackFromTheMenu() {
+        val home = Files.createTempDirectory("kt-feedback-menu").toFile()
+        val options = NodeOptions(Platform.DESKTOP, listOf("ws://127.0.0.1:9"), false, false, "127.0.0.1:0", "", "")
+        val n = KtNode.open(File(home, "identity").path, File(home, "data").path, System.getProperty("kt.worker"), options)
+        n.createList(null, "Home")
+        rule.setContent { SobresApp(n) }
+        rule.waitUntil(5_000) { shown("feedbackMenu") }
+        rule.onNodeWithTag("feedbackMenu").performClick()
+        rule.waitUntil(5_000) { shown("feedbackMessage") }
+        n.close()
+    }
 }

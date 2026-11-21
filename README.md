@@ -42,6 +42,10 @@ Not in this first version: bank connections (they need paid aggregators and your
 
 Sobres shares its sync engine with [Tasks](https://github.com/kleiders3010/kleiders-tasks).
 
+## Problems or ideas
+
+In the app: Send feedback. If the app doesn't open at all, open an issue at https://github.com/kleiders3010/sobres/issues or email hello@jurisgames.com.
+
 ## Privacy
 [apps.jurisgames.com/privacy](https://apps.jurisgames.com/privacy/)
 

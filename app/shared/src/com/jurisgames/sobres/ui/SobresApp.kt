@@ -149,7 +149,7 @@ class Env(
 /** The list shown last, per device (a plain file next to the app's data). */
 private fun lastListFile(node: KtNode) = File(node.dataDir(), "ui-last-list")
 
-private enum class Dialog { Settings, Join, LinkThis, LinkCode, NewList, Rename, Style, Undo }
+private enum class Dialog { Settings, Join, LinkThis, LinkCode, NewList, Rename, Style, Undo, Feedback }
 
 @Composable
 private fun Home(env: Env, openedCode: String?) {
@@ -197,6 +197,7 @@ private fun Home(env: Env, openedCode: String?) {
         linkThis = { dialog = Dialog.LinkThis },
         linkCode = { dialog = Dialog.LinkCode },
         settings = { dialog = Dialog.Settings },
+        feedback = { dialog = Dialog.Feedback },
     )
     val listMenu = ListActions(
         share = { current?.let(::share) },
@@ -246,6 +247,7 @@ private fun Home(env: Env, openedCode: String?) {
                         linkThis = { scope.launch { drawer.close() }; menu.linkThis() },
                         linkCode = { scope.launch { drawer.close() }; menu.linkCode() },
                         settings = { scope.launch { drawer.close() }; menu.settings() },
+                        feedback = { scope.launch { drawer.close() }; menu.feedback() },
                     ), compact = false)
                 }
             }) {
@@ -278,12 +280,13 @@ private fun Home(env: Env, openedCode: String?) {
         Dialog.Rename -> current?.let { l -> RenameDialog(l.name, onDone = { n -> runCatching { node.renameList(l.id, n) }; env.changed(); dialog = null }, onClose = { dialog = null }) }
         Dialog.Style -> current?.let { l -> StyleDialog(node, l, onDone = env.changed, onClose = { dialog = null }) }
         Dialog.Undo -> current?.let { l -> UndoDialog(node, l, onDone = env.changed, onClose = { dialog = null }) }
+        Dialog.Feedback -> FeedbackDialog(node, onSent = { dialog = null; scope.launch { snackbar.showSnackbar(tr("Thanks! Your message was sent.")) } }, onClose = { dialog = null })
         null -> {}
     }
     invite?.let { (name, info) -> CodeDialog(tr("Invite to {name}", "name" to name), tr("Anyone with this link or code can join."), info, env.onShare) { invite = null } }
 }
 
-class MenuActions(val join: () -> Unit, val linkThis: () -> Unit, val linkCode: () -> Unit, val settings: () -> Unit)
+class MenuActions(val join: () -> Unit, val linkThis: () -> Unit, val linkCode: () -> Unit, val settings: () -> Unit, val feedback: () -> Unit)
 class ListActions(val share: () -> Unit, val rename: () -> Unit, val style: () -> Unit, val undo: () -> Unit, val delete: () -> Unit)
 
 @Composable
@@ -333,6 +336,8 @@ private fun MenuPanel(env: Env, a: MenuActions, compact: Boolean) {
         }
         if (env.onRestore != null && remember(node, env.version) { node.isPristine() }) MenuRow(tr("Restore from a backup"), "restore", env.onRestore)
         MenuRow(tr("Settings"), "settingsOpen", a.settings)
+        // in the menu itself, not only inside Settings (Kleider, 2026-11-21: "Make sure users always have an easy way to give feedback or report bugs on ALL our apps")
+        MenuRow(tr("Send feedback"), "feedbackMenu", a.feedback)
     }
 }
 
