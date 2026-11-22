@@ -103,6 +103,7 @@ fn a_desktop_links_to_a_phone_and_undo_takes_it_back() {
     let notes = desk.create_list(None, "Desk notes").unwrap();
     desk.edit(&notes, |d| tk::add_task(d, None, "fix lamp").map_err(Into::into)).unwrap();
     net.round(&[&phone, &friend]);
+    friend.take_changes().unwrap(); // a first look records the group as it is
 
     // The phone makes a link code; the desktop sees whose account it is before joining.
     let (code, _) = phone.create_link_code().unwrap();
@@ -129,6 +130,19 @@ fn a_desktop_links_to_a_phone_and_undo_takes_it_back() {
     assert_eq!(recent.len(), 1);
     assert_eq!(recent[0].name, "Alex's PC");
     assert_eq!(desk.recent_links().len(), 0, "the new device itself isn't asked");
+    // pinned: a device added to a shared group by linking is announced there like any join (audit T6).
+    for a in [&phone, &desk, &friend] {
+        a.publish_names().unwrap();
+    }
+    net.round(&[&phone, &desk, &friend]);
+    let joined: Vec<(String, String)> = friend
+        .take_changes()
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.kind == kt_tasks::app::ChangeKind::Joined)
+        .map(|c| (c.who, c.group_name))
+        .collect();
+    assert_eq!(joined, [("Alex".to_string(), "Family".to_string())]);
 
     // The desktop edits the shared list; the friend sees it.
     let c = desk.find_list("Chores").unwrap();
