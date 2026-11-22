@@ -355,14 +355,38 @@ impl App {
         let lists: Vec<ListInfo> = self.lists().into_iter().filter(|l| l.group == personal).collect();
         let app = wire::encode(*b"AB", 1, &(meta, self.blobs_for(&lists, attachments::BACKUP_BLOB_BYTES))).map_err(eng)?;
         let b = self.lock().make_backup(u64::from(recovery_days.clamp(1, 30)) * 86_400_000, app).map_err(eng)?;
-        kt_engine::replica::backup::seal(&b).map_err(eng)
+        let lock = self.lock().backup_lock();
+        kt_engine::replica::backup::seal_locked(&b, lock.as_ref()).map_err(eng)
+    }
+
+    /// Set (`Some`) or remove (`None`) the backup password (audit T11). Stretched once
+    /// here (~0.5 s); later backups are locked with it without asking again.
+    pub fn set_backup_password(&self, password: Option<&str>) -> Result<()> {
+        let lock = match password {
+            Some(p) if p.chars().count() < kt_engine::replica::backup::PW_MIN_CHARS => return Err(Error::Invalid("password too short".into())),
+            Some(p) => Some(kt_engine::replica::backup::BackupLock::new(p).map_err(eng)?),
+            None => None,
+        };
+        self.lock().set_backup_lock(lock.as_ref()).map_err(eng)
+    }
+
+    /// Backups from this device need a password to open.
+    pub fn has_backup_password(&self) -> bool {
+        self.lock().backup_lock().is_some()
     }
 
     /// Restore a backup onto a fresh device (new identity, D1). Shared groups: readable at
     /// once and back in when a member's device sees the recovery request. Groups nobody
     /// else can let us into (solo lists): their lists are copied into our new personal group.
     pub fn restore(identity_dir: &Path, data_dir: &Path, sandbox: SandboxConfig, backup: &[u8]) -> Result<(App, RestoreSummary)> {
-        let b = kt_engine::replica::backup::open(backup).map_err(eng)?;
+        Self::restore_with(identity_dir, data_dir, sandbox, backup, None)
+    }
+
+    /// [`App::restore`] with the backup's password (a locked backup). The new device keeps
+    /// the password for its own backups.
+    pub fn restore_with(identity_dir: &Path, data_dir: &Path, sandbox: SandboxConfig, backup: &[u8], password: Option<&str>) -> Result<(App, RestoreSummary)> {
+        let b = kt_engine::replica::backup::open_with(backup, password).map_err(eng)?;
+        let locked = kt_engine::replica::backup::needs_password(backup);
         // Backups made before attachments hold the meta alone.
         let (meta, blobs): (Vec<u8>, Vec<Vec<u8>>) = if b.app.starts_with(b"AB") { wire::decode(*b"AB", 1, &b.app).map_err(eng)?.1 } else { (b.app.clone(), Vec::new()) };
         let old: AppMeta = wire::decode(*b"AM", 1, &meta).map_err(eng)?.1;
@@ -385,6 +409,9 @@ impl App {
             storage::write_atomic(&data_dir.join("app.meta"), &wire::encode(*b"AM", 1, &old).map_err(eng)?).map_err(eng)?;
         }
         let app = App::with_replica(replica, data_dir)?;
+        if let (true, Some(p)) = (locked, password) {
+            app.set_backup_password(Some(p))?;
+        }
         for blob in &blobs {
             let _ = app.blob_store().put(blob); // stored under their own hash: nothing to trust
         }

@@ -35,6 +35,21 @@ fun trSummary(s: String): String = if (!Lang.spanish) s else s
     .replace("a device", "un dispositivo")
 
 val ES: Map<String, String> = mapOf(
+    "Backup password" to "Contraseña de la copia",
+    "Change backup password" to "Cambiar la contraseña de la copia",
+    "Backups will need this password to open, also on a new phone. If you forget it, they can't be opened." to "Las copias van a pedir esta contraseña para abrirse, también en un teléfono nuevo. Si la olvidás, no se pueden abrir.",
+    "Password" to "Contraseña",
+    "Repeat it" to "Repetila",
+    "At least {n} characters" to "Al menos {n} caracteres",
+    "The passwords don't match" to "Las contraseñas no coinciden",
+    "Remove password" to "Quitar la contraseña",
+    "Your backup has a password" to "Tu copia tiene contraseña",
+    "That password doesn't open this backup." to "Esa contraseña no abre esta copia.",
+    "wrong backup password" to "Contraseña de la copia incorrecta",
+    "password too short" to "La contraseña es muy corta",
+    "Restore" to "Restaurar",
+    "Change it" to "Cambiarla",
+    "Set one" to "Poner una",
     // lists and tasks
     "Lists" to "Listas",
     "My tasks" to "Mis tareas",

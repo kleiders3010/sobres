@@ -26,7 +26,7 @@ class TasksApplication : Application() {
     /** Registers the app Context with the Rust side (src/android.rs in kt-ffi). */
     private external fun initAndroidContext(context: android.content.Context)
 
-    private fun open(bytes: ByteArray?): KtNode {
+    private fun open(bytes: ByteArray?, password: String? = null): KtNode {
         // Same library JNA uses; loading it this way lets it see the app Context, which
         // iroh needs for the system DNS servers and network changes.
         System.loadLibrary("kt_ffi")
@@ -43,15 +43,15 @@ class TasksApplication : Application() {
         val backup = File(filesDir, "backup").absolutePath
         val options = NodeOptions(Platform.PHONE, emptyList(), true, true, "", android.os.Build.MODEL, backup)
         return if (bytes == null) KtNode.open(identity.absolutePath, data.absolutePath, worker, options)
-        else KtNode.openRestoring(identity.absolutePath, data.absolutePath, worker, options, bytes)
+        else KtNode.openRestoring(identity.absolutePath, data.absolutePath, worker, options, bytes, password)
     }
 
     /** First launch, restore skipped during phone setup: restore a backup file the user picked. */
     @Synchronized
-    fun restoreFrom(bytes: ByteArray): KtNode {
+    fun restoreFrom(bytes: ByteArray, password: String? = null): KtNode {
         current?.let { it.stopLive(); it.close() }
         current = null
-        return open(bytes).also { current = it; Measure.onNodeOpened(this, it) }
+        return open(bytes, password).also { current = it; Measure.onNodeOpened(this, it) }
     }
 
     /** Wi-Fi and charging decide whether this phone helps others sync right now (§7a). */

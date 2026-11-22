@@ -105,6 +105,8 @@ fun SobresApp(
     dynamicScheme: ((Boolean) -> androidx.compose.material3.ColorScheme?)? = null,
     /** Print a page (the list's name, the page as HTML): Android's print service, the desktop's print dialog. */
     onPrint: ((String, String) -> Unit)? = null,
+    /** Restore a password-locked backup (its bytes, the checked password). */
+    onRestoreWith: ((ByteArray, String) -> Unit)? = null,
 ) {
     // Bumped whenever the node reports a change (another device, membership, compaction).
     var version by remember { mutableIntStateOf(0) }
@@ -116,13 +118,27 @@ fun SobresApp(
         })
         onDispose { }
     }
+    var restoring by remember { mutableStateOf<Pair<ByteArray, String>?>(null) }
     AppTheme(node, version, dynamicScheme) {
         CompositionLocalProvider(LocalImageDecoder provides decodeImage) {
             Surface(Modifier.fillMaxSize()) {
-                Home(
+                // While a locked backup is restored the old node gets closed: nothing on screen may still read it.
+                if (restoring == null) Home(
                     Env(node, version, { version++ }, onRestore, onExport, onShare, onSettings, onScan, onImport, update, onUpdate, onPickImage, required, onPrint),
                     openedCode,
                 )
+                // A locked backup waits for its password (picked, or restored by Android onto this phone).
+                if (onRestoreWith != null) {
+                    LaunchedEffect(node) { node.waitingBackup()?.let { PendingRestore.bytes = it } }
+                    PendingRestore.bytes?.let { bytes ->
+                        RestorePasswordDialog(bytes, onRestore = { pw -> PendingRestore.bytes = null; restoring = bytes to pw }, onCancel = { PendingRestore.bytes = null })
+                    }
+                    LaunchedEffect(restoring) {
+                        val (bytes, pw) = restoring ?: return@LaunchedEffect
+                        androidx.compose.runtime.withFrameNanos { } // the screen above is gone first
+                        try { onRestoreWith(bytes, pw) } finally { restoring = null }
+                    }
+                }
             }
         }
     }

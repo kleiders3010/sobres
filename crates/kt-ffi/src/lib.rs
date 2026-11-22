@@ -420,6 +420,24 @@ pub fn accent_color(theme_id: String, hue: Option<f64>, vivid: u8, dark: bool) -
 }
 
 /// A safe file name (without extension) for exporting a list with this title (D60).
+/// The backup file needs a password to open (audit T11).
+#[uniffi::export]
+pub fn backup_needs_password(backup: Vec<u8>) -> bool {
+    kt_engine::replica::backup::needs_password(&backup)
+}
+
+/// The password opens this backup file (one Argon2id run, ~0.5 s: call off the UI thread).
+#[uniffi::export]
+pub fn backup_password_opens(backup: Vec<u8>, password: String) -> bool {
+    kt_engine::replica::backup::open_with(&backup, Some(&password)).is_ok()
+}
+
+/// Shortest backup password accepted.
+#[uniffi::export]
+pub fn backup_password_min_chars() -> u32 {
+    kt_engine::replica::backup::PW_MIN_CHARS as u32
+}
+
 #[uniffi::export]
 pub fn export_file_stem(title: String) -> String {
     kt_tasks::export::file_stem(&title)
@@ -736,6 +754,8 @@ pub struct KtNode {
 }
 
 const BACKUP_FILE: &str = "tasks.ktbackup";
+/// A password-locked backup found on a fresh install waits here until the user enters the password.
+const WAITING_FILE: &str = "locked.waiting.ktbackup";
 const BACKUP_EVERY: Duration = Duration::from_secs(24 * 3600);
 const RECOVERY_DAYS: u32 = 30;
 
@@ -1029,26 +1049,40 @@ impl KtNode {
         let found = (!options.backup_dir.is_empty() && !PathBuf::from(&data_dir).join("app.meta").exists())
             .then(|| std::fs::read(PathBuf::from(&options.backup_dir).join(BACKUP_FILE)).ok())
             .flatten();
-        KtNode::start(identity_dir, data_dir, worker_path, options, found, false)
+        // Locked with a password: kept aside (daily backups don't overwrite it) until the user enters it.
+        let found = match found {
+            Some(b) if kt_engine::replica::backup::needs_password(&b) => {
+                let dir = PathBuf::from(&options.backup_dir);
+                let _ = std::fs::rename(dir.join(BACKUP_FILE), dir.join(WAITING_FILE));
+                None
+            }
+            other => other,
+        };
+        KtNode::start(identity_dir, data_dir, worker_path, options, found, None, false)
     }
 
     /// Restore a backup file the user picked (first launch, nothing made on this device yet).
     #[uniffi::constructor]
-    pub fn open_restoring(identity_dir: String, data_dir: String, worker_path: String, options: NodeOptions, backup: Vec<u8>) -> Result<Arc<KtNode>, KtError> {
-        kt_engine::replica::backup::open(&backup).map_err(|_| fail("not a Tasks backup file"))?;
-        KtNode::start(identity_dir, data_dir, worker_path, options, Some(backup), true)
+    /// `password`: for a password-locked backup (wrong or missing: the error says "wrong backup password").
+    pub fn open_restoring(identity_dir: String, data_dir: String, worker_path: String, options: NodeOptions, backup: Vec<u8>, password: Option<String>) -> Result<Arc<KtNode>, KtError> {
+        match kt_engine::replica::backup::open_with(&backup, password.as_deref()) {
+            Err(_) if kt_engine::replica::backup::needs_password(&backup) => return Err(fail(kt_engine::replica::backup::WRONG_PASSWORD)),
+            Err(_) => return Err(fail("not a Tasks backup file")),
+            Ok(_) => {}
+        }
+        KtNode::start(identity_dir, data_dir, worker_path, options, Some(backup), password, true)
     }
 }
 
 impl KtNode {
-    fn start(identity_dir: String, data_dir: String, worker_path: String, options: NodeOptions, restore: Option<Vec<u8>>, picked: bool) -> Result<Arc<KtNode>, KtError> {
+    fn start(identity_dir: String, data_dir: String, worker_path: String, options: NodeOptions, restore: Option<Vec<u8>>, password: Option<String>, picked: bool) -> Result<Arc<KtNode>, KtError> {
         vault::use_builtin();
         // Sobres codes are never found by Tasks and the other way round (round 5, S13).
         kt_engine::invite::set_app_tag("sobres");
         let sandbox = SandboxConfig { worker: PathBuf::from(worker_path), timeout: Duration::from_secs(20) };
         let data = PathBuf::from(&data_dir);
         let identity = PathBuf::from(identity_dir);
-        let (app, restored) = match restore.map(|b| App::restore(&identity, &data, sandbox.clone(), &b)) {
+        let (app, restored) = match restore.map(|b| App::restore_with(&identity, &data, sandbox.clone(), &b, password.as_deref())) {
             Some(Ok((app, s))) => (app, Some(RestoreInfo { rejoining_groups: s.rejoining.len() as u32, rehomed_lists: s.rehomed_lists as u32 })),
             // A file the user picked: say what went wrong.
             Some(Err(e)) if picked => return Err(fail(e)),
@@ -1135,6 +1169,11 @@ impl KtNode {
             let _ = app.set_device_name(&options.device_name);
         }
         let backup_dir = (!options.backup_dir.is_empty()).then(|| PathBuf::from(&options.backup_dir));
+        if restored.is_some() {
+            if let Some(dir) = &backup_dir {
+                let _ = std::fs::remove_file(dir.join(WAITING_FILE));
+            }
+        }
         let node = Arc::new(KtNode {
             key_in_store: identity.join("device.sealed").exists(),
             app,
@@ -1221,6 +1260,32 @@ impl KtNode {
     /// Write a sealed backup now (export, or before a risky operation).
     pub fn write_backup(&self, path: String) -> Result<(), KtError> {
         self.write_backup_to(&PathBuf::from(path))
+    }
+
+    /// Set (`Some`) or remove (`None`) the backup password (audit T11; ~0.5 s, call off the
+    /// UI thread). The daily backup is rewritten at once and the previous copy (made under
+    /// the old setting) removed.
+    pub fn set_backup_password(&self, password: Option<String>) -> Result<(), KtError> {
+        self.app.set_backup_password(password.as_deref()).map_err(fail)?;
+        if let Some(dir) = &self.backup_dir {
+            let path = dir.join(BACKUP_FILE);
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_file(path.with_extension("prev.ktbackup"));
+            self.write_backup_to(&path)?;
+        }
+        Ok(())
+    }
+
+    /// Backups from this device need the password to open.
+    pub fn has_backup_password(&self) -> bool {
+        self.app.has_backup_password()
+    }
+
+    /// A password-locked backup came with this fresh install (Android restored it) and
+    /// waits for its password: its bytes, for `open_restoring`. None once anything is made here.
+    pub fn waiting_backup(&self) -> Option<Vec<u8>> {
+        let dir = self.backup_dir.as_ref()?;
+        self.app.is_pristine().then(|| std::fs::read(dir.join(WAITING_FILE)).ok()).flatten()
     }
 
     pub fn device_key(&self) -> String {

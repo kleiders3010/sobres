@@ -41,6 +41,8 @@ fun SettingsDialog(node: KtNode, onSaved: (Settings) -> Unit, onClose: () -> Uni
     if (diagnostics) DiagnosticsDialog(node, onClose = { diagnostics = false })
     var feedback by remember { mutableStateOf(false) }
     var thanked by remember { mutableStateOf(false) }
+    var backupPw by remember { mutableStateOf(false) }
+    if (backupPw) BackupPasswordDialog(node, onClose = { backupPw = false })
     if (feedback) FeedbackDialog(node, onSent = { feedback = false; thanked = true }, onClose = { feedback = false })
     AlertDialog(
         onDismissRequest = onClose,
@@ -93,6 +95,10 @@ fun SettingsDialog(node: KtNode, onSaved: (Settings) -> Unit, onClose: () -> Uni
                     )
                     // a problem or an idea: to the person who makes the app (with the diagnostics, if the tick stays on)
                     TextButton(onClick = { feedback = true }, modifier = Modifier.testTag("feedbackOpen")) { Text(tr("Send feedback")) }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    Text(tr("Backup password"), modifier = Modifier.weight(1f))
+                    TextButton(onClick = { backupPw = true }, modifier = Modifier.testTag("backupPwOpen")) { Text(tr(if (remember(node, backupPw) { node.hasBackupPassword() }) "Change it" else "Set one")) }
                 }
             }
         },

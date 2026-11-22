@@ -1,8 +1,10 @@
 //! Backups (DESIGN §11): a device's groups, keys and documents in one sealed file.
 //!
-//! - **Sealed, no password:** a random key sits inside the file; automated scanning can't
-//!   read it, deliberate effort can (§11). Backups hold live group keys, so periodic key
-//!   rotation (§5) limits how long a stolen one is useful.
+//! - **Sealed; a password if the user sets one:** without one, a random key sits inside the
+//!   file; automated scanning can't read it, deliberate effort can (§11). With a backup
+//!   password (audit T11) the file is sealed with an Argon2id-stretched key and opens only
+//!   with the password. Backups hold live group keys, so periodic key rotation (§5) limits
+//!   how long a stolen one is useful.
 //! - A restore creates a **fresh device identity** (D1: identities are never restored).
 //!   The new device holds the keys (it can read at once) but isn't a member; to get back
 //!   in, each backup carries a **recovery invite** per shared group, which members' devices
@@ -15,7 +17,7 @@ use crate::crypto::{self, SymKey};
 use crate::epochs::EpochRecord;
 use crate::ids::{DeviceId, DocId, EpochId, GroupId};
 use crate::invite::{CodeKind, InviteRecord};
-use crate::{wire, Error, Result};
+use crate::{storage, wire, Error, Result};
 use loro::{ExportMode, LoroDoc};
 
 const MAGIC: &[u8; 4] = b"KTB1";
@@ -66,10 +68,130 @@ pub fn seal(b: &Backup) -> Result<Vec<u8>> {
     Ok(seal_file(MAGIC, b"kt/backup/v1", &wire::encode(TAG, 1, b)?))
 }
 
-/// Open a sealed backup file (untrusted input).
+/// Open a sealed backup file (untrusted input). A password-locked one needs [`open_with`].
 pub fn open(bytes: &[u8]) -> Result<Backup> {
-    let body = open_file(MAGIC, b"kt/backup/v1", bytes).map_err(|_| Error::Invalid("not a backup file".into()))?;
+    open_with(bytes, None)
+}
+
+// Password-locked backups (audit T11): "KTB2" + salt + Argon2id cost + the body sealed with
+// the key the password stretches to. Without the password the file opens nothing.
+const PW_MAGIC: &[u8; 4] = b"KTB2";
+const PW_CONTEXT: &[u8] = b"kt/backup/v2";
+/// Argon2id cost for backup passwords (the invite floor, D9: 64 MiB, 3 passes).
+pub const PW_M_KIB: u32 = 64 * 1024;
+pub const PW_T: u32 = 3;
+/// Shortest backup password the apps accept.
+pub const PW_MIN_CHARS: usize = 8;
+/// What an engine error says when the password doesn't open the file.
+pub const WRONG_PASSWORD: &str = "wrong backup password";
+
+/// A backup password stretched once (salt + key), kept on the device so daily backups
+/// don't need the password again. Never put it in a backup.
+#[derive(Clone)]
+pub struct BackupLock {
+    salt: [u8; 16],
+    m_kib: u32,
+    t: u32,
+    key: SymKey,
+}
+
+impl BackupLock {
+    /// Stretch `password` with a new salt (one Argon2id run, ~0.5 s on a phone).
+    pub fn new(password: &str) -> Result<BackupLock> {
+        let mut salt = [0u8; 16];
+        rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut salt);
+        let key = stretch(password, &salt, PW_M_KIB, PW_T)?;
+        Ok(BackupLock { salt, m_kib: PW_M_KIB, t: PW_T, key })
+    }
+
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut out = self.salt.to_vec();
+        out.extend_from_slice(&self.m_kib.to_le_bytes());
+        out.extend_from_slice(&self.t.to_le_bytes());
+        out.extend_from_slice(&self.key.0);
+        out
+    }
+
+    fn from_bytes(b: &[u8]) -> Option<BackupLock> {
+        (b.len() == 16 + 8 + 32).then(|| BackupLock {
+            salt: b[..16].try_into().expect("16"),
+            m_kib: u32::from_le_bytes(b[16..20].try_into().expect("4")),
+            t: u32::from_le_bytes(b[20..24].try_into().expect("4")),
+            key: SymKey(b[24..56].try_into().expect("32")),
+        })
+    }
+}
+
+fn stretch(password: &str, salt: &[u8], m_kib: u32, t: u32) -> Result<SymKey> {
+    use argon2::{Algorithm, Argon2, Params, Version};
+    // Untrusted files name their own cost: never more than 4x ours (memory), never less than the floor.
+    if !(PW_M_KIB..=4 * PW_M_KIB).contains(&m_kib) || !(1..=10).contains(&t) {
+        return Err(Error::Invalid("not a backup file".into()));
+    }
+    let params = Params::new(m_kib, t, 1, Some(32)).map_err(|e| Error::Invalid(e.to_string()))?;
+    let mut out = [0u8; 32];
+    Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
+        .hash_password_into(password.as_bytes(), salt, &mut out)
+        .map_err(|e| Error::Invalid(e.to_string()))?;
+    Ok(SymKey(out))
+}
+
+/// Seal a backup with a password lock (`None`: the plain sealed format).
+pub fn seal_locked(b: &Backup, lock: Option<&BackupLock>) -> Result<Vec<u8>> {
+    let Some(lock) = lock else { return seal(b) };
+    let mut out = PW_MAGIC.to_vec();
+    out.extend_from_slice(&lock.salt);
+    out.extend_from_slice(&lock.m_kib.to_le_bytes());
+    out.extend_from_slice(&lock.t.to_le_bytes());
+    out.extend_from_slice(&crypto::seal(&lock.key, PW_CONTEXT, &wire::encode(TAG, 1, b)?));
+    Ok(out)
+}
+
+/// The file is a password-locked backup.
+pub fn needs_password(bytes: &[u8]) -> bool {
+    bytes.len() > 4 + 24 && &bytes[..4] == PW_MAGIC
+}
+
+/// Open a backup file (untrusted input); `password` opens a locked one. A wrong or missing
+/// password is `Invalid(WRONG_PASSWORD)`.
+pub fn open_with(bytes: &[u8], password: Option<&str>) -> Result<Backup> {
+    let body = if needs_password(bytes) {
+        let password = password.ok_or_else(|| Error::Invalid(WRONG_PASSWORD.into()))?;
+        let m_kib = u32::from_le_bytes(bytes[20..24].try_into().expect("4"));
+        let t = u32::from_le_bytes(bytes[24..28].try_into().expect("4"));
+        let key = stretch(password, &bytes[4..20], m_kib, t)?;
+        crypto::open(&key, PW_CONTEXT, &bytes[28..]).map_err(|_| Error::Invalid(WRONG_PASSWORD.into()))?
+    } else {
+        open_file(MAGIC, b"kt/backup/v1", bytes).map_err(|_| Error::Invalid("not a backup file".into()))?
+    };
     Ok(wire::decode(TAG, 1, &body)?.1)
+}
+
+const LOCK_FILE: &str = "backup_lock";
+
+impl Replica {
+    /// Set (`Some`) or remove (`None`) this device's backup password lock. Kept in the data
+    /// folder, sealed with a key from this device's own key (never backed up, D1).
+    pub fn set_backup_lock(&mut self, lock: Option<&BackupLock>) -> Result<()> {
+        let path = self.layout.root().join(LOCK_FILE);
+        match lock {
+            Some(l) => storage::write_atomic(&path, &crypto::seal(&self.lock_key(), LOCK_FILE.as_bytes(), &l.to_bytes())),
+            None => match std::fs::remove_file(&path) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+                _ => Ok(()),
+            },
+        }
+    }
+
+    /// This device's backup password lock, if one is set.
+    pub fn backup_lock(&self) -> Option<BackupLock> {
+        let b = std::fs::read(self.layout.root().join(LOCK_FILE)).ok()?;
+        BackupLock::from_bytes(&crypto::open(&self.lock_key(), LOCK_FILE.as_bytes(), &b).ok()?)
+    }
+
+    fn lock_key(&self) -> SymKey {
+        crypto::derive(&self.identity.secret().to_bytes(), "kt/backup-lock-at-rest/v1", &[])
+    }
 }
 
 /// What a restore did per group.
@@ -217,5 +339,37 @@ impl Replica {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample() -> Backup {
+        Backup { created_ms: 1, old_device: DeviceId([7; 32]), groups: Vec::new(), app: b"secret app data".to_vec() }
+    }
+
+    #[test]
+    fn a_password_lock_opens_only_with_its_password() {
+        let lock = BackupLock::new("correct horse").unwrap();
+        let file = seal_locked(&sample(), Some(&lock)).unwrap();
+        // pinned: format KTB2 is the password-locked backup (audit T11); KTB1 stays the plain one
+        assert_eq!(&file[..4], b"KTB2");
+        assert!(needs_password(&file));
+        assert!(!file.windows(6).any(|w| w == b"secret"), "nothing in the clear");
+        assert!(open(&file).is_err());
+        assert!(open_with(&file, Some("wrong horse")).is_err());
+        assert_eq!(open_with(&file, Some("correct horse")).unwrap().app, sample().app);
+        // The lock survives being kept on the device; a plain file still opens without one.
+        let kept = BackupLock::from_bytes(&lock.to_bytes()).unwrap();
+        assert!(open_with(&seal_locked(&sample(), Some(&kept)).unwrap(), Some("correct horse")).is_ok());
+        let plain = seal_locked(&sample(), None).unwrap();
+        assert!(!needs_password(&plain));
+        assert_eq!(open(&plain).unwrap().app, sample().app);
+        // A file naming an absurd Argon2 cost is refused before any work.
+        let mut greedy = file.clone();
+        greedy[20..24].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(open_with(&greedy, Some("correct horse")).is_err());
     }
 }

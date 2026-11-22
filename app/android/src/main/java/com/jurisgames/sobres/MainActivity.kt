@@ -58,19 +58,27 @@ class MainActivity : ComponentActivity() {
                     Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
                 }
             }
-            val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-                if (uri != null) scope.launch {
-                    try {
-                        node = withContext(Dispatchers.IO) {
-                            val bytes = contentResolver.openInputStream(uri)!!.use { it.readBytes() }
-                            app.restoreFrom(bytes)
-                        }
-                        node.startLive()
-                    } catch (e: Exception) {
-                        node = app.node
-                        Toast.makeText(this@MainActivity, tr(e.message ?: tr("Restore failed")), Toast.LENGTH_LONG).show()
+            fun restore(read: () -> ByteArray, password: String?) = scope.launch {
+                try {
+                    val restored = withContext(Dispatchers.IO) {
+                        val bytes = read()
+                        // A password-locked backup: the app asks for its password first (audit T11).
+                        if (password == null && com.jurisgames.sobres.core.backupNeedsPassword(bytes)) {
+                            com.jurisgames.sobres.ui.PendingRestore.bytes = bytes
+                            null
+                        } else app.restoreFrom(bytes, password)
                     }
+                    if (restored != null) {
+                        node = restored
+                        node.startLive()
+                    }
+                } catch (e: Exception) {
+                    node = app.node
+                    Toast.makeText(this@MainActivity, tr(e.message ?: tr("Restore failed")), Toast.LENGTH_LONG).show()
                 }
+            }
+            val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                if (uri != null) restore({ contentResolver.openInputStream(uri)!!.use { it.readBytes() } }, null)
             }
             SobresApp(node, onPickImage = { done ->
                 onPicked = done
@@ -79,7 +87,7 @@ class MainActivity : ComponentActivity() {
                 startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, link), tr("Share invite")))
             }, update = update.value, required = required.value, onUpdate = { link ->
                 startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(link)))
-            }, onScan = { QrScanner.scan(this, it) }, openedCode = opened.value, onSettings = { app.applyBackgroundSync(it.syncInBackground) }, onRestore = { pick.launch(arrayOf("*/*")) }, onExport = { l ->
+            }, onScan = { QrScanner.scan(this, it) }, openedCode = opened.value, onSettings = { app.applyBackgroundSync(it.syncInBackground) }, onRestore = { pick.launch(arrayOf("*/*")) }, onRestoreWith = { bytes, pw -> restore({ bytes }, pw) }, onExport = { l ->
                 // The activity as a CSV file, shared to any app (Sheets, email, Drive).
                 // Only the export being shared stays (round 5, S9): older copies of the whole budget go first.
                 val dir = java.io.File(cacheDir, "exports").apply { listFiles()?.forEach { it.delete() }; mkdirs() }

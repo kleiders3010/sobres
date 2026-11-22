@@ -729,6 +729,12 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_kt_ffi_checksum_func_android_context_ready(
     ): Int
+    external fun uniffi_kt_ffi_checksum_func_backup_needs_password(
+    ): Int
+    external fun uniffi_kt_ffi_checksum_func_backup_password_min_chars(
+    ): Int
+    external fun uniffi_kt_ffi_checksum_func_backup_password_opens(
+    ): Int
     external fun uniffi_kt_ffi_checksum_func_export_file_stem(
     ): Int
     external fun uniffi_kt_ffi_checksum_func_icon_symbol(
@@ -780,6 +786,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_kt_ffi_checksum_method_ktnode_flush(
     ): Int
     external fun uniffi_kt_ffi_checksum_method_ktnode_groups(
+    ): Int
+    external fun uniffi_kt_ffi_checksum_method_ktnode_has_backup_password(
     ): Int
     external fun uniffi_kt_ffi_checksum_method_ktnode_import_list_file(
     ): Int
@@ -845,6 +853,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_kt_ffi_checksum_method_ktnode_set_assignee(
     ): Int
+    external fun uniffi_kt_ffi_checksum_method_ktnode_set_backup_password(
+    ): Int
     external fun uniffi_kt_ffi_checksum_method_ktnode_set_device_state(
     ): Int
     external fun uniffi_kt_ffi_checksum_method_ktnode_set_display_name(
@@ -892,6 +902,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_kt_ffi_checksum_method_ktnode_unlink_device(
     ): Int
     external fun uniffi_kt_ffi_checksum_method_ktnode_upcoming_reminders(
+    ): Int
+    external fun uniffi_kt_ffi_checksum_method_ktnode_waiting_backup(
     ): Int
     external fun uniffi_kt_ffi_checksum_method_ktnode_write_backup(
     ): Int
@@ -985,7 +997,7 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_kt_ffi_fn_constructor_ktnode_open(`identityDir`: RustBuffer.ByValue,`dataDir`: RustBuffer.ByValue,`workerPath`: RustBuffer.ByValue,`options`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
-    external fun uniffi_kt_ffi_fn_constructor_ktnode_open_restoring(`identityDir`: RustBuffer.ByValue,`dataDir`: RustBuffer.ByValue,`workerPath`: RustBuffer.ByValue,`options`: RustBuffer.ByValue,`backup`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    external fun uniffi_kt_ffi_fn_constructor_ktnode_open_restoring(`identityDir`: RustBuffer.ByValue,`dataDir`: RustBuffer.ByValue,`workerPath`: RustBuffer.ByValue,`options`: RustBuffer.ByValue,`backup`: RustBuffer.ByValue,`password`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
     external fun uniffi_kt_ffi_fn_method_ktnode_add_image(`ptr`: Long,`listId`: RustBuffer.ByValue,`taskId`: RustBuffer.ByValue,`bytes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1023,6 +1035,8 @@ internal object UniffiLib {
     ): Int
     external fun uniffi_kt_ffi_fn_method_ktnode_groups(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_kt_ffi_fn_method_ktnode_has_backup_password(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
     external fun uniffi_kt_ffi_fn_method_ktnode_import_list_file(`ptr`: Long,`groupId`: RustBuffer.ByValue,`file`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kt_ffi_fn_method_ktnode_invite(`ptr`: Long,`groupId`: RustBuffer.ByValue,`days`: Int,uniffi_out_err: UniffiRustCallStatus, 
@@ -1087,6 +1101,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_kt_ffi_fn_method_ktnode_set_assignee(`ptr`: Long,`listId`: RustBuffer.ByValue,`taskId`: RustBuffer.ByValue,`person`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_kt_ffi_fn_method_ktnode_set_backup_password(`ptr`: Long,`password`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     external fun uniffi_kt_ffi_fn_method_ktnode_set_device_state(`ptr`: Long,`onWifi`: Byte,`charging`: Byte,`constrained`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_kt_ffi_fn_method_ktnode_set_display_name(`ptr`: Long,`name`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1134,6 +1150,8 @@ internal object UniffiLib {
     external fun uniffi_kt_ffi_fn_method_ktnode_unlink_device(`ptr`: Long,`deviceId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_kt_ffi_fn_method_ktnode_upcoming_reminders(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kt_ffi_fn_method_ktnode_waiting_backup(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kt_ffi_fn_method_ktnode_write_backup(`ptr`: Long,`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -1196,6 +1214,12 @@ internal object UniffiLib {
     external fun uniffi_kt_ffi_fn_func_accent_color(`themeId`: RustBuffer.ByValue,`hue`: RustBuffer.ByValue,`vivid`: Byte,`dark`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Int
     external fun uniffi_kt_ffi_fn_func_android_context_ready(uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    external fun uniffi_kt_ffi_fn_func_backup_needs_password(`backup`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    external fun uniffi_kt_ffi_fn_func_backup_password_min_chars(uniffi_out_err: UniffiRustCallStatus, 
+    ): Int
+    external fun uniffi_kt_ffi_fn_func_backup_password_opens(`backup`: RustBuffer.ByValue,`password`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     external fun uniffi_kt_ffi_fn_func_export_file_stem(`title`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1336,7 +1360,16 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_kt_ffi_checksum_func_android_context_ready() and 0xFFFF) != 19053) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_kt_ffi_checksum_func_export_file_stem() and 0xFFFF) != 28662) {
+    if ((lib.uniffi_kt_ffi_checksum_func_backup_needs_password() and 0xFFFF) != 15502) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_kt_ffi_checksum_func_backup_password_min_chars() and 0xFFFF) != 17930) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_kt_ffi_checksum_func_backup_password_opens() and 0xFFFF) != 43629) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_kt_ffi_checksum_func_export_file_stem() and 0xFFFF) != 56415) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_kt_ffi_checksum_func_icon_symbol() and 0xFFFF) != 39886) {
@@ -1412,6 +1445,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_kt_ffi_checksum_method_ktnode_groups() and 0xFFFF) != 61646) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_kt_ffi_checksum_method_ktnode_has_backup_password() and 0xFFFF) != 8839) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_kt_ffi_checksum_method_ktnode_import_list_file() and 0xFFFF) != 5518) {
@@ -1510,6 +1546,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_kt_ffi_checksum_method_ktnode_set_assignee() and 0xFFFF) != 52062) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_kt_ffi_checksum_method_ktnode_set_backup_password() and 0xFFFF) != 15905) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_kt_ffi_checksum_method_ktnode_set_device_state() and 0xFFFF) != 3199) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1580,6 +1619,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_kt_ffi_checksum_method_ktnode_upcoming_reminders() and 0xFFFF) != 16505) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_kt_ffi_checksum_method_ktnode_waiting_backup() and 0xFFFF) != 47409) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_kt_ffi_checksum_method_ktnode_write_backup() and 0xFFFF) != 29557) {
@@ -1663,7 +1705,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_kt_ffi_checksum_constructor_ktnode_open() and 0xFFFF) != 17990) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_kt_ffi_checksum_constructor_ktnode_open_restoring() and 0xFFFF) != 41847) {
+    if ((lib.uniffi_kt_ffi_checksum_constructor_ktnode_open_restoring() and 0xFFFF) != 41787) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -2965,6 +3007,11 @@ public interface KtNodeInterface {
     fun `groups`(): List<GroupItem>
     
     /**
+     * Backups from this device need the password to open.
+     */
+    fun `hasBackupPassword`(): kotlin.Boolean
+    
+    /**
      * Import a `.tasklist` file as a new list (in `group_id`, or among your own lists).
      */
     fun `importListFile`(`groupId`: kotlin.String?, `file`: kotlin.ByteArray): ListItem
@@ -3122,6 +3169,13 @@ public interface KtNodeInterface {
     fun `setAssignee`(`listId`: kotlin.String, `taskId`: kotlin.String, `person`: PersonItem?)
     
     /**
+     * Set (`Some`) or remove (`None`) the backup password (audit T11; ~0.5 s, call off the
+     * UI thread). The daily backup is rewritten at once and the previous copy (made under
+     * the old setting) removed.
+     */
+    fun `setBackupPassword`(`password`: kotlin.String?)
+    
+    /**
      * Phones report Wi-Fi, charging, and whether the phone is constrained (battery saver,
      * low battery, heat, data saver); the node knows when the app is open. Helping others
      * follows them (§7a).
@@ -3236,6 +3290,12 @@ public interface KtNodeInterface {
      * Reminders of open tasks from an hour ago on, across all lists, soonest first.
      */
     fun `upcomingReminders`(): List<ReminderItem>
+    
+    /**
+     * A password-locked backup came with this fresh install (Android restored it) and
+     * waits for its password: its bytes, for `open_restoring`. None once anything is made here.
+     */
+    fun `waitingBackup`(): kotlin.ByteArray?
     
     /**
      * Write a sealed backup now (export, or before a risky operation).
@@ -3724,6 +3784,22 @@ open class KtNode: Disposable, AutoCloseable, KtNodeInterface
     callWithHandle {
     uniffiRustCall() { _status ->
     UniffiLib.uniffi_kt_ffi_fn_method_ktnode_groups(
+        it,
+        _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Backups from this device need the password to open.
+     */override fun `hasBackupPassword`(): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_kt_ffi_fn_method_ktnode_has_backup_password(
         it,
         _status)
 }
@@ -4285,6 +4361,25 @@ open class KtNode: Disposable, AutoCloseable, KtNodeInterface
 
     
     /**
+     * Set (`Some`) or remove (`None`) the backup password (audit T11; ~0.5 s, call off the
+     * UI thread). The daily backup is rewritten at once and the previous copy (made under
+     * the old setting) removed.
+     */
+    @Throws(KtException::class)override fun `setBackupPassword`(`password`: kotlin.String?)
+        = 
+    callWithHandle {
+    uniffiRustCallWithError(KtException) { _status ->
+    UniffiLib.uniffi_kt_ffi_fn_method_ktnode_set_backup_password(
+        it,
+        
+        FfiConverterOptionalString.lower(`password`),_status)
+}
+    }
+    
+    
+
+    
+    /**
      * Phones report Wi-Fi, charging, and whether the phone is constrained (battery saver,
      * low battery, heat, data saver); the node knows when the app is open. Helping others
      * follows them (§7a).
@@ -4694,6 +4789,23 @@ open class KtNode: Disposable, AutoCloseable, KtNodeInterface
     callWithHandle {
     uniffiRustCall() { _status ->
     UniffiLib.uniffi_kt_ffi_fn_method_ktnode_upcoming_reminders(
+        it,
+        _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * A password-locked backup came with this fresh install (Android restored it) and
+     * waits for its password: its bytes, for `open_restoring`. None once anything is made here.
+     */override fun `waitingBackup`(): kotlin.ByteArray? {
+            return FfiConverterOptionalByteArray.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_kt_ffi_fn_method_ktnode_waiting_backup(
         it,
         _status)
 }
@@ -5168,8 +5280,9 @@ open class KtNode: Disposable, AutoCloseable, KtNodeInterface
         
     /**
      * Restore a backup file the user picked (first launch, nothing made on this device yet).
+     * `password`: for a password-locked backup (wrong or missing: the error says "wrong backup password").
      */
-    @Throws(KtException::class) fun `openRestoring`(`identityDir`: kotlin.String, `dataDir`: kotlin.String, `workerPath`: kotlin.String, `options`: NodeOptions, `backup`: kotlin.ByteArray): KtNode {
+    @Throws(KtException::class) fun `openRestoring`(`identityDir`: kotlin.String, `dataDir`: kotlin.String, `workerPath`: kotlin.String, `options`: NodeOptions, `backup`: kotlin.ByteArray, `password`: kotlin.String?): KtNode {
             return FfiConverterTypeKtNode.lift(
     uniffiRustCallWithError(KtException) { _status ->
     UniffiLib.uniffi_kt_ffi_fn_constructor_ktnode_open_restoring(
@@ -5179,7 +5292,8 @@ open class KtNode: Disposable, AutoCloseable, KtNodeInterface
         FfiConverterString.lower(`dataDir`),
         FfiConverterString.lower(`workerPath`),
         FfiConverterTypeNodeOptions.lower(`options`),
-        FfiConverterByteArray.lower(`backup`),_status)
+        FfiConverterByteArray.lower(`backup`),
+        FfiConverterOptionalString.lower(`password`),_status)
 }
     )
     }
@@ -8607,7 +8721,47 @@ public object FfiConverterSequenceTypeTxItem: FfiConverterRustBuffer<List<TxItem
 
         /**
          * A safe file name (without extension) for exporting a list with this title (D60).
-         */ fun `exportFileStem`(`title`: kotlin.String): kotlin.String {
+         * The backup file needs a password to open (audit T11).
+         */ fun `backupNeedsPassword`(`backup`: kotlin.ByteArray): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_kt_ffi_fn_func_backup_needs_password(
+    
+        
+        FfiConverterByteArray.lower(`backup`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Shortest backup password accepted.
+         */ fun `backupPasswordMinChars`(): kotlin.UInt {
+            return FfiConverterUInt.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_kt_ffi_fn_func_backup_password_min_chars(
+    
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * The password opens this backup file (one Argon2id run, ~0.5 s: call off the UI thread).
+         */ fun `backupPasswordOpens`(`backup`: kotlin.ByteArray, `password`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_kt_ffi_fn_func_backup_password_opens(
+    
+        
+        FfiConverterByteArray.lower(`backup`),
+        FfiConverterString.lower(`password`),_status)
+}
+    )
+    }
+    
+ fun `exportFileStem`(`title`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
     UniffiLib.uniffi_kt_ffi_fn_func_export_file_stem(
