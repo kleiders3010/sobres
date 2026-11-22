@@ -38,7 +38,7 @@ class DesktopDiagnosticsTest {
         rule.onNodeWithTag("version").performClick()
         rule.waitUntil(5_000) { shown("diagnostics") }
         val text = rule.onNodeWithTag("diagnostics").fetchSemanticsNode().config.getOrNull(SemanticsProperties.Text)!!.joinToString { it.text }
-        for (part in listOf("Layers", "Nostr relays:", "Direct connections:", "Storage helpers", "DHT:", "Relaying for others:", "Your own lists:", "Sync log", "sent ")) {
+        for (part in listOf("Layers", "Nostr relays:", "Direct connections:", "Storage helpers", "DHT:", "Relaying for others:", "Your own:", "Sync log", "sent ")) {
             check(part in text) { "missing $part in:\n$text" }
         }
         check("Secret plans" !in text && "very private" !in text) { "no task content in diagnostics" }

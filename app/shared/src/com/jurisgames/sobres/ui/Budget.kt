@@ -208,7 +208,6 @@ fun BudgetPane(
                     item(tr("Color and icon"), "styleOpen", listMenu.style)
                     item(tr("Currency symbol"), "currencyOpen") { currency = true }
                     env.onExport?.let { ex -> item(tr("Export CSV"), "export") { ex(list) } }
-                    item(tr("Undo changes…"), "undoOpen", listMenu.undo)
                     HorizontalDivider()
                     DropdownMenuItem(
                         text = { Text(tr("Delete budget"), color = MaterialTheme.colorScheme.error) },
@@ -225,6 +224,12 @@ fun BudgetPane(
                 modifier = Modifier.padding(start = if (onMenu != null) 52.dp else 16.dp, end = 16.dp).testTag("sharedWith"),
             )
         }
+        val unreadable = remember(node, env.version, list.id) { runCatching { node.budgetUnreadable(list.id) }.getOrDefault(0u) }
+        if (unreadable > 0u) Text(
+            tr("{n} entries could not be read (made by a different app) and count nowhere", "n" to unreadable),
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.padding(start = if (onMenu != null) 52.dp else 16.dp, end = 16.dp).testTag("unreadable"),
+        )
         chips?.let { Spacer(Modifier.size(4.dp)); it() }
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for (s in Section.entries) FilterChip(section == s, { section = s }, label = { Text(tr(s.label)) }, modifier = Modifier.testTag(s.tag))
@@ -567,6 +572,9 @@ private fun AddSheet(
     val focus = remember { FocusRequester() }
     androidx.compose.runtime.LaunchedEffect(Unit) { kotlinx.coroutines.delay(100); runCatching { focus.requestFocus() } }
 
+    // A new repeat starts at most a year back (round 5, S2; the core refuses it too).
+    val tooOld = rep == null && edit == null && every.isNotEmpty() &&
+        runCatching { LocalDate.parse(date) < LocalDate.parse(today()).minusDays(366) }.getOrDefault(false)
     val cents = parseCents(amount)?.takeIf { it > 0 }
     val splitParts = splitText.mapNotNull { (id, t) -> parseCents(t)?.takeIf { it > 0 }?.let { id to it } }
     val splitLeft = (cents ?: 0) - splitParts.sumOf { it.second }
@@ -607,7 +615,7 @@ private fun AddSheet(
 
     AlertDialog(
         onDismissRequest = onClose,
-        confirmButton = { TextButton(onClick = ::save, enabled = input != null, modifier = Modifier.testTag("addSave")) { Text(tr("Save")) } },
+        confirmButton = { TextButton(onClick = ::save, enabled = input != null && !tooOld, modifier = Modifier.testTag("addSave")) { Text(tr("Save")) } },
         dismissButton = {
             Row {
                 if (edit != null) TextButton(onClick = {
@@ -618,6 +626,14 @@ private fun AddSheet(
                     runCatching { node.deleteRepeating(list.id, rep.id, false) }
                     onSaved(tr("Stopped repeating"), { node.deleteRepeating(list.id, rep.id, true) }, null)
                 }, modifier = Modifier.testTag("repStop")) { Text(tr("Stop repeating"), color = MaterialTheme.colorScheme.error) }
+                // Everything it posted, in one go (round 5, S2), with Undo.
+                if (rep != null) TextButton(onClick = {
+                    val gone = runCatching { node.deleteRepeatingAndEntries(list.id, rep.id) }.getOrNull() ?: return@TextButton
+                    onSaved(tr("Removed {n} entries", "n" to gone.size), {
+                        for (t in gone) node.restoreTx(list.id, t)
+                        node.deleteRepeating(list.id, rep.id, true)
+                    }, null)
+                }, modifier = Modifier.testTag("repRemoveAll")) { Text(tr("Remove all"), color = MaterialTheme.colorScheme.error) }
                 TextButton(onClick = onClose) { Text(tr("Cancel")) }
             }
         },
@@ -705,6 +721,7 @@ private fun AddSheet(
                     for ((k, l) in EVERY) FilterChip(every == k, { every = k }, label = { Text(tr(l)) }, modifier = Modifier.testTag("every-$k"))
                 }
                 if (rep != null) Text(tr("Changes apply from {date} on", "date" to dayLabel(rep.next)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (tooOld) Text(tr("A repeat can start at most a year back"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("repTooOld"))
                 OutlinedTextField(note, { note = it }, singleLine = true, label = { Text(tr("Note")) }, modifier = Modifier.fillMaxWidth().testTag("note"))
             }
         },
@@ -745,7 +762,8 @@ private fun ActivityView(b: BudgetView, activity: List<TxItem>, repeating: List<
         }
         LazyColumn(Modifier.weight(1f)) {
             if (q.isEmpty() && repeating.isNotEmpty()) {
-                item(key = "repeating") {
+                // Every key carries its type (round 5, S6): an entry id chosen by another member can't collide.
+                item(key = "h-repeating") {
                     Text(tr("Repeating"), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 2.dp))
                 }
                 items(repeating, key = { "r-" + it.id }) { r ->
@@ -763,10 +781,10 @@ private fun ActivityView(b: BudgetView, activity: List<TxItem>, repeating: List<
                 }
             }
             for ((d, day) in shown.groupBy { it.date }) {
-                item(key = "d-$d") {
+                item(key = "h-d-$d") {
                     Text(dayLabel(d), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 2.dp))
                 }
-                items(day, key = { it.id }) { t ->
+                items(day, key = { "t-" + it.id }) { t ->
                     Row(Modifier.fillMaxWidth().clickable { onOpen(t) }.padding(horizontal = 16.dp, vertical = 8.dp).testTag("tx-" + entryTitle(t)), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(entryTitle(t), maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -774,6 +792,7 @@ private fun ActivityView(b: BudgetView, activity: List<TxItem>, repeating: List<
                                 t.parts.takeIf { t.kind == "exp" }?.joinToString(", ") { it.envelopeName },
                                 t.accountName.takeIf { it.isNotEmpty() && t.kind != "xfer" },
                                 t.by.takeIf { shared && it.isNotEmpty() },
+                                t.editedBy.takeIf { shared && it.isNotEmpty() }?.let { tr("edited by {name}", "name" to it) },
                                 t.note.takeIf { it.isNotEmpty() },
                             ).joinToString(" · ")
                             if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)

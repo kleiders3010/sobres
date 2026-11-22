@@ -23,6 +23,10 @@ const ALLOWED_LINKS: [&str; 3] = [
 #[derive(Deserialize)]
 struct Manifest {
     format: u32,
+    /// Goes up with every published file (round 5, S11): an app refuses a signed file older than the newest it
+    /// accepted, so an old signed copy can't be served forever to hide a fix.
+    #[serde(default)]
+    serial: u64,
     apps: std::collections::HashMap<String, AppEntry>,
 }
 
@@ -116,33 +120,39 @@ pub fn parse(bytes: &[u8], app: &str, current: u64, channel: Channel) -> Option<
 /// next to it) wins, a newer version or not. Unsigned or wrongly signed: no notice (someone who takes over the
 /// website or the GitHub account can't send people anywhere).
 pub async fn check(urls: &[&str], app: &str, current: u64, channel: Channel) -> Option<Update> {
-    check_signed(urls, &crate::manifest::OPERATOR_PUBLIC_KEY, app, current, channel).await
+    check_signed(urls, &crate::manifest::OPERATOR_PUBLIC_KEY, app, current, channel, 0).await.0
+}
+
+/// [`check`] that refuses a signed file older than `min_serial`; also returns the serial of the file it took
+/// (store it and pass it next time).
+pub async fn check_since(urls: &[&str], app: &str, current: u64, channel: Channel, min_serial: u64) -> (Option<Update>, u64) {
+    check_signed(urls, &crate::manifest::OPERATOR_PUBLIC_KEY, app, current, channel, min_serial).await
 }
 
 async fn fetch_capped(client: &reqwest::Client, url: &str) -> Option<Vec<u8>> {
     let resp = client.get(url).send().await.ok()?;
-    if !resp.status().is_success() || resp.content_length().is_some_and(|l| l as usize > MAX_BYTES) {
+    if !resp.status().is_success() {
         return None;
     }
-    let b = resp.bytes().await.ok()?;
-    (b.len() <= MAX_BYTES).then(|| b.to_vec())
+    // Streamed with a hard cap: a hostile answer of any size never fills memory (S11).
+    crate::http::bytes_capped(resp, MAX_BYTES).await
 }
 
-pub async fn check_signed(urls: &[&str], key: &[u8; 32], app: &str, current: u64, channel: Channel) -> Option<Update> {
+pub async fn check_signed(urls: &[&str], key: &[u8; 32], app: &str, current: u64, channel: Channel, min_serial: u64) -> (Option<Update>, u64) {
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let client = crate::http::client(std::time::Duration::from_secs(15))?;
+    let Some(client) = crate::http::client(std::time::Duration::from_secs(15)) else { return (None, min_serial) };
     for u in urls {
         let Some(b) = fetch_capped(&client, u).await else { continue };
-        if serde_json::from_slice::<Manifest>(&b).is_err() {
+        let Ok(m) = serde_json::from_slice::<Manifest>(&b) else {
             continue; // unreadable here: try the next source
-        }
+        };
         let Some(sig) = fetch_capped(&client, &u.replace("update.json", "update.sig")).await else { continue };
-        if !signature_ok(&b, &sig, key) {
-            continue;
+        if !signature_ok(&b, &sig, key) || m.serial < min_serial {
+            continue; // unsigned, or an older signed copy than one already seen
         }
-        return parse(&b, app, current, channel);
+        return (parse(&b, app, current, channel), m.serial);
     }
-    None
+    (None, min_serial)
 }
 
 #[cfg(test)]
@@ -209,9 +219,11 @@ mod tests {
         });
         let dead = "http://127.0.0.1:9/update.json";
         let live = format!("http://{addr}/update.json");
-        let u = check_signed(&[dead, &live], &k.public().sign, "tasks", 1, Channel::Apk).await.unwrap();
+        let u = check_signed(&[dead, &live], &k.public().sign, "tasks", 1, Channel::Apk, 0).await.0.unwrap();
         assert_eq!(u.link, "https://github.com/kleiders3010/jurisgames/releases");
         let other = kt_engine::crypto::DeviceSecret::generate();
-        assert!(check_signed(&[&live], &other.public().sign, "tasks", 1, Channel::Apk).await.is_none(), "unsigned for this key: no notice");
+        assert!(check_signed(&[&live], &other.public().sign, "tasks", 1, Channel::Apk, 0).await.0.is_none(), "unsigned for this key: no notice");
+        // pinned: a signed file older than one already accepted is refused (round 5, S11). M has no serial (0).
+        assert!(check_signed(&[&live], &k.public().sign, "tasks", 1, Channel::Apk, 1).await.0.is_none(), "replayed older file");
     }
 }

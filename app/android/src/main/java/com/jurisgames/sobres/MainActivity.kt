@@ -30,6 +30,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge() // the app draws behind the status and navigation bars and pads itself
         super.onCreate(savedInstanceState)
+        // A CSV shared earlier is the whole budget in clear text: never left in the cache (round 5, S9).
+        if (savedInstanceState == null) java.io.File(cacheDir, "exports").deleteRecursively()
         opened.value = ourLink(intent)
         QrScanner.prepare(this) // play: fetch Google's scanner module before anyone taps Scan
         setContent {
@@ -79,7 +81,8 @@ class MainActivity : ComponentActivity() {
                 startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(link)))
             }, onScan = { QrScanner.scan(this, it) }, openedCode = opened.value, onSettings = { app.applyBackgroundSync(it.syncInBackground) }, onRestore = { pick.launch(arrayOf("*/*")) }, onExport = { l ->
                 // The activity as a CSV file, shared to any app (Sheets, email, Drive).
-                val dir = java.io.File(cacheDir, "exports").apply { mkdirs() }
+                // Only the export being shared stays (round 5, S9): older copies of the whole budget go first.
+                val dir = java.io.File(cacheDir, "exports").apply { listFiles()?.forEach { it.delete() }; mkdirs() }
                 val file = java.io.File(dir, com.jurisgames.sobres.core.exportFileStem(l.name) + ".csv")
                 file.writeText(node.exportCsv(l.id))
                 val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.files", file)

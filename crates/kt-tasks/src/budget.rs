@@ -83,6 +83,10 @@ pub struct Tx {
     pub parts: Vec<(String, i64)>,
     /// [`NOT_CLEARED`], [`CLEARED`] (seen at the bank) or [`RECONCILED`] (part of a finished statement).
     pub status: i64,
+    /// The document peer (one per device) that entered it and the one that changed it last: who entered it is
+    /// shown from these, never from `by` alone (round 5, S5: `by` is text the writer's app chose).
+    pub by_peer: Option<u64>,
+    pub edit_peer: Option<u64>,
 }
 
 pub const NOT_CLEARED: i64 = 0;
@@ -169,47 +173,94 @@ fn check_cents(c: i64) -> Result<()> {
 
 // ---------- reading ----------
 
+/// Text from the document as shown: control characters out, at most [`MAX_TEXT`] (another member's app may have
+/// written anything, round 5, S4/S9).
+fn shown(t: String) -> String {
+    if t.chars().count() <= MAX_TEXT && !t.chars().any(char::is_control) {
+        return t;
+    }
+    t.chars().filter(|c| !c.is_control()).take(MAX_TEXT).collect()
+}
+
+/// An id this app makes: 16 hex characters, or a repeat's entry `<16 hex>.<date>`.
+fn our_id(id: &str) -> bool {
+    let hex16 = |x: &str| x.len() == 16 && x.bytes().all(|b| b.is_ascii_hexdigit());
+    match id.split_once('.') {
+        None => hex16(id),
+        Some((rep, date)) => hex16(rep) && valid_date(date),
+    }
+}
+
+/// Whether an entry as read passes the same rules as one being written (S4: data from another member is input
+/// from a stranger). Envelopes and accounts may be deleted since, so only their ids' presence is not checked.
+fn readable(t: &Tx) -> bool {
+    let cents_ok = |c: i64| c.checked_abs().is_some_and(|a| a <= MAX_CENTS);
+    if !our_id(&t.id) || !valid_date(&t.date) || !cents_ok(t.amount) || !t.parts.iter().all(|p| cents_ok(p.1)) {
+        return false;
+    }
+    match t.kind.as_str() {
+        "exp" => t.amount != 0 && !t.account.is_empty() && !t.parts.is_empty() && t.parts.iter().map(|p| p.1).sum::<i64>() == t.amount,
+        "inc" => t.amount > 0 && !t.account.is_empty() && t.parts.is_empty(),
+        "fill" => t.parts.iter().any(|p| p.1 != 0),
+        "xfer" => t.amount > 0 && !t.account.is_empty() && !t.to.is_empty() && t.account != t.to && t.parts.is_empty(),
+        _ => false,
+    }
+}
+
+fn read_tx(id: String, m: &LoroMap) -> Option<Tx> {
+    let kind = s(m, "k");
+    if !KINDS_TX.contains(&kind.as_str()) {
+        return None; // a newer version's kind: kept in the document, not counted
+    }
+    let mut parts = Vec::new();
+    if let Some(ValueOrContainer::Container(loro::Container::Map(p))) = m.get("p") {
+        p.for_each(|e, v| {
+            let c = match v {
+                ValueOrContainer::Value(LoroValue::I64(c)) => c,
+                ValueOrContainer::Value(LoroValue::Double(c)) if c.is_finite() && c.abs() < 9e18 => c as i64,
+                _ => i64::MAX, // not a whole number of cents: fails the check below
+            };
+            if c != 0 {
+                parts.push((e.to_string(), c));
+            }
+        });
+    }
+    parts.sort();
+    let by_peer = m.get_last_editor("at");
+    let editors: Vec<u64> = ["d", "amt", "k", "acct", "to", "payee", "note", "p", "clr"].iter().filter_map(|k| m.get_last_editor(k)).collect();
+    let edit_peer = editors.iter().copied().find(|p| Some(*p) != by_peer).or(by_peer);
+    Some(Tx {
+        id,
+        kind,
+        date: s(m, "d"),
+        amount: match m.get("amt") {
+            Some(ValueOrContainer::Value(LoroValue::I64(v))) => v,
+            _ => i64::MAX, // a float or missing: not an amount this app writes
+        },
+        account: s(m, "acct"),
+        to: s(m, "to"),
+        payee: shown(s(m, "payee")),
+        note: shown(s(m, "note")),
+        by: shown(s(m, "by")),
+        at: i(m, "at").max(0) as u64,
+        parts,
+        status: i(m, "clr").clamp(NOT_CLEARED, RECONCILED),
+        by_peer,
+        edit_peer,
+    })
+}
+
 pub fn transactions(doc: &LoroDoc) -> Vec<Tx> {
-    let mut out: Vec<Tx> = entries(doc, "tx")
-        .into_iter()
-        .filter_map(|(id, m)| {
-            let kind = s(&m, "k");
-            if !KINDS_TX.contains(&kind.as_str()) {
-                return None; // a newer version's kind: kept in the document, not counted
-            }
-            let mut parts = Vec::new();
-            if let Some(ValueOrContainer::Container(loro::Container::Map(p))) = m.get("p") {
-                p.for_each(|e, v| {
-                    let c = match v {
-                        ValueOrContainer::Value(LoroValue::I64(c)) => c,
-                        ValueOrContainer::Value(LoroValue::Double(c)) => c as i64,
-                        _ => 0,
-                    };
-                    if c != 0 {
-                        parts.push((e.to_string(), c));
-                    }
-                });
-            }
-            parts.sort();
-            Some(Tx {
-                id,
-                kind,
-                date: s(&m, "d"),
-                amount: i(&m, "amt"),
-                account: s(&m, "acct"),
-                to: s(&m, "to"),
-                payee: s(&m, "payee"),
-                note: s(&m, "note"),
-                by: s(&m, "by"),
-                at: i(&m, "at").max(0) as u64,
-                parts,
-                status: i(&m, "clr").clamp(NOT_CLEARED, RECONCILED),
-            })
-        })
-        .collect();
+    let mut out: Vec<Tx> = entries(doc, "tx").into_iter().filter_map(|(id, m)| read_tx(id, &m)).filter(readable).collect();
     // Newest first: by date, then by when entered, then id (stable on every device).
     out.sort_by(|a, b| (&b.date, b.at, &b.id).cmp(&(&a.date, a.at, &a.id)));
     out
+}
+
+/// How many entries could not be read (written by another app with values this one refuses): they count nowhere
+/// and the budget screen says so.
+pub fn unreadable(doc: &LoroDoc) -> usize {
+    entries(doc, "tx").into_iter().filter_map(|(id, m)| read_tx(id, &m)).filter(|t| !readable(t)).count()
 }
 
 /// Monthly share of an envelope's amount on `today` ("YYYY-MM-DD"): the amount for a monthly
@@ -219,9 +270,9 @@ pub fn monthly_share(e: &Envelope, today: &str) -> i64 {
     match e.kind.as_str() {
         "y" => (e.amount + 11) / 12,
         "g" => {
-            let missing = (e.amount - e.balance).max(0);
+            let missing = e.amount.saturating_sub(e.balance).max(0);
             match e.due.as_deref().and_then(months_until(today)) {
-                Some(n) if n > 0 => (missing + n - 1) / n,
+                Some(n) if n > 0 => missing.saturating_add(n - 1) / n,
                 _ => missing,
             }
         }
@@ -250,32 +301,36 @@ pub fn budget(doc: &LoroDoc, today: &str) -> Budget {
     let mut env_spent: BTreeMap<&str, i64> = BTreeMap::new();
     let mut acct_bal: BTreeMap<&str, i64> = BTreeMap::new();
     let mut acct_clr: BTreeMap<&str, i64> = BTreeMap::new();
+    // Money maths never wraps (round 5, S4): every sum saturates.
+    fn add(x: &mut i64, c: i64) {
+        *x = x.saturating_add(c);
+    }
     for t in &txs {
         if t.status != NOT_CLEARED {
-            *acct_clr.entry(&t.account).or_default() += effect(t, &t.account);
+            add(acct_clr.entry(&t.account).or_default(), effect(t, &t.account));
             if t.kind == "xfer" {
-                *acct_clr.entry(&t.to).or_default() += effect(t, &t.to);
+                add(acct_clr.entry(&t.to).or_default(), effect(t, &t.to));
             }
         }
         match t.kind.as_str() {
             "exp" => {
-                *acct_bal.entry(&t.account).or_default() -= t.amount;
+                add(acct_bal.entry(&t.account).or_default(), -t.amount);
                 for (e, c) in &t.parts {
-                    *env_bal.entry(e).or_default() -= c;
+                    add(env_bal.entry(e).or_default(), -c);
                     if t.date.starts_with(month) {
-                        *env_spent.entry(e).or_default() += c;
+                        add(env_spent.entry(e).or_default(), *c);
                     }
                 }
             }
-            "inc" => *acct_bal.entry(&t.account).or_default() += t.amount,
+            "inc" => add(acct_bal.entry(&t.account).or_default(), t.amount),
             "fill" => {
                 for (e, c) in &t.parts {
-                    *env_bal.entry(e).or_default() += c;
+                    add(env_bal.entry(e).or_default(), *c);
                 }
             }
             "xfer" => {
-                *acct_bal.entry(&t.account).or_default() -= t.amount;
-                *acct_bal.entry(&t.to).or_default() += t.amount;
+                add(acct_bal.entry(&t.account).or_default(), -t.amount);
+                add(acct_bal.entry(&t.to).or_default(), t.amount);
             }
             _ => {}
         }
@@ -290,9 +345,9 @@ pub fn budget(doc: &LoroDoc, today: &str) -> Budget {
             Envelope {
                 balance: env_bal.get(id.as_str()).copied().unwrap_or(0),
                 spent_month: env_spent.get(id.as_str()).copied().unwrap_or(0),
-                name: s(&m, "name"),
-                amount: i(&m, "amount"),
-                group: s(&m, "group"),
+                name: shown(s(&m, "name")),
+                amount: i(&m, "amount").clamp(-MAX_CENTS, MAX_CENTS),
+                group: shown(s(&m, "group")),
                 order: f(&m, "order"),
                 kind,
                 due,
@@ -307,10 +362,10 @@ pub fn budget(doc: &LoroDoc, today: &str) -> Budget {
         .map(|(id, m)| {
             let kind = s(&m, "kind");
             let kind = if KINDS_ACCT.contains(&kind.as_str()) { kind } else { "bank".to_string() };
-            let start = i(&m, "start");
+            let start = i(&m, "start").clamp(-MAX_CENTS, MAX_CENTS);
             Account {
-                balance: start + acct_bal.get(id.as_str()).copied().unwrap_or(0),
-                cleared: start + acct_clr.get(id.as_str()).copied().unwrap_or(0),
+                balance: start.saturating_add(acct_bal.get(id.as_str()).copied().unwrap_or(0)),
+                cleared: start.saturating_add(acct_clr.get(id.as_str()).copied().unwrap_or(0)),
                 rec_date: Some(s(&m, "rd")).filter(|d| valid_date(d)).unwrap_or_default(),
                 rec_balance: i(&m, "rbal"),
                 name: s(&m, "name"),
@@ -322,8 +377,9 @@ pub fn budget(doc: &LoroDoc, today: &str) -> Budget {
         })
         .collect();
     accounts.sort_by(|a, b| a.order.total_cmp(&b.order).then(a.id.cmp(&b.id)));
-    let available = accounts.iter().map(|a| a.balance).sum::<i64>() - envelopes.iter().map(|e| e.balance).sum::<i64>();
-    let monthly_need = envelopes.iter().map(|e| monthly_share(e, today)).sum();
+    let total = |it: &mut dyn Iterator<Item = i64>| it.fold(0i64, |a, c| a.saturating_add(c));
+    let available = total(&mut accounts.iter().map(|a| a.balance)).saturating_sub(total(&mut envelopes.iter().map(|e| e.balance)));
+    let monthly_need = total(&mut envelopes.iter().map(|e| monthly_share(e, today)));
     Budget { name: crate::list_name(doc), currency: s(&meta, "currency"), envelopes, accounts, available, monthly_need }
 }
 
@@ -333,7 +389,8 @@ pub fn spending(doc: &LoroDoc, from: &str, to: &str) -> Vec<(String, i64)> {
     let mut by: BTreeMap<String, i64> = BTreeMap::new();
     for t in transactions(doc).into_iter().filter(|t| t.kind == "exp" && t.date.as_str() >= from && t.date.as_str() <= to) {
         for (e, c) in t.parts {
-            *by.entry(e).or_default() += c;
+            let x = by.entry(e).or_default();
+            *x = x.saturating_add(c);
         }
     }
     let mut out: Vec<(String, i64)> = by.into_iter().filter(|(_, c)| *c != 0).collect();
@@ -696,7 +753,7 @@ pub fn finish_reconcile(doc: &LoroDoc, account: &str, date: &str, statement: i64
     check_cents(statement)?;
     let a = child(doc, "acct", account).ok_or(Error::NotFound)?;
     let txs = transactions(doc);
-    let cleared = i(&a, "start") + txs.iter().filter(|t| t.status != NOT_CLEARED).map(|t| effect(t, account)).sum::<i64>();
+    let cleared = txs.iter().filter(|t| t.status != NOT_CLEARED).map(|t| effect(t, account)).fold(i(&a, "start").clamp(-MAX_CENTS, MAX_CENTS), |s, c| s.saturating_add(c));
     if cleared != statement {
         return Err(Error::Invalid("difference".into()));
     }
@@ -802,6 +859,8 @@ fn template(id: &str, m: &LoroMap) -> Tx {
         at: 0,
         parts: transactions_one(m),
         status: NOT_CLEARED,
+        by_peer: None,
+        edit_peer: None,
     }
 }
 
@@ -885,6 +944,42 @@ pub fn delete_repeat(doc: &LoroDoc, id: &str, now_ms: u64, undo: bool) -> Result
     Ok(())
 }
 
+/// How far back a repeat's first date and its catch-up may reach (round 5, S2).
+pub const CATCH_UP_DAYS: i64 = 366;
+
+/// Whether a new repeat may start on `start`: at most [`CATCH_UP_DAYS`] back and five years ahead of `today`.
+pub fn repeat_start_ok(start: &str, today: &str) -> bool {
+    match (valid_date(start).then(|| civil_days(start)).flatten(), civil_days(today)) {
+        (Some(s), Some(t)) => s >= t - CATCH_UP_DAYS && s <= t + 5 * 366,
+        _ => false,
+    }
+}
+
+/// The UTC day of a time in ms since 1970, "YYYY-MM-DD".
+pub fn day_of_ms(ms: u64) -> String {
+    civil_date(civil_days("1970-01-01").unwrap_or(0) + (ms / 86_400_000) as i64)
+}
+
+/// Every entry a repeat posted (ids), for "remove what it posted".
+pub fn repeat_entries(doc: &LoroDoc, rep: &str) -> Vec<String> {
+    let prefix = format!("{rep}.");
+    entries(doc, "tx").into_iter().filter(|(id, m)| id.starts_with(&prefix) || s(m, "rep") == rep).map(|(id, _)| id).collect()
+}
+
+/// Stop a repeat and delete every entry it posted, in one change. Returns the entries as they were (for Undo).
+pub fn delete_repeat_and_entries(doc: &LoroDoc, rep: &str, now_ms: u64) -> Result<Vec<Tx>> {
+    let ids: std::collections::BTreeSet<String> = repeat_entries(doc, rep).into_iter().collect();
+    let gone: Vec<Tx> = entries(doc, "tx").into_iter().filter(|(id, _)| ids.contains(id)).filter_map(|(id, m)| read_tx(id, &m)).collect();
+    for id in &ids {
+        doc.get_map("tx").delete(id).map_err(loro)?;
+    }
+    if let Some(m) = child(doc, "rep", rep) {
+        m.insert("gone", now_ms.max(1) as i64).map_err(loro)?;
+    }
+    doc.commit();
+    Ok(gone)
+}
+
 /// The id of the entry a repeat posts on `date`.
 pub fn repeat_tx_id(rep: &str, date: &str) -> String {
     format!("{rep}.{date}")
@@ -898,6 +993,9 @@ pub fn post_due(doc: &LoroDoc, today: &str, now_ms: u64) -> Result<Vec<String>> 
         return Err(Error::Invalid("date".into()));
     }
     let mut posted = Vec::new();
+    // Catch-up reaches at most CATCH_UP_DAYS back (round 5, S2): a repeat whose first date is long ago (a typo in
+    // the year, or another member's app) posts about a year of entries at most, never decades of them.
+    let cutoff = civil_days(today).unwrap_or(0) - CATCH_UP_DAYS;
     for r in repeats(doc) {
         let Some(m) = child(doc, "rep", &r.id) else { continue };
         let done = match m.get("done") {
@@ -912,7 +1010,7 @@ pub fn post_due(doc: &LoroDoc, today: &str, now_ms: u64) -> Result<Vec<String>> 
                 break;
             }
             n += 1;
-            if have.contains(&d) {
+            if have.contains(&d) || civil_days(&d).is_none_or(|x| x < cutoff) {
                 continue;
             }
             done.insert(&d, 1i64).map_err(loro)?;
@@ -1073,7 +1171,9 @@ mod tests {
         assert_eq!(transactions(&d)[0].by, "Ana");
         let fresh = crate::rebuild(&d, 99).unwrap();
         assert_eq!(budget(&fresh, "2026-11-10"), before);
-        assert_eq!(transactions(&fresh), transactions(&d));
+        // A rebuild re-writes everything under its own peer: entries are equal apart from who wrote them last.
+        let anon = |v: Vec<Tx>| v.into_iter().map(|t| Tx { by_peer: None, edit_peer: None, ..t }).collect::<Vec<_>>();
+        assert_eq!(anon(transactions(&fresh)), anon(transactions(&d)));
     }
 
     #[test]
@@ -1179,5 +1279,106 @@ mod tests {
         d.get_map("env").delete(&fun).unwrap();
         assert!(post_due(&d, "2026-11-30", 2).unwrap().is_empty());
         assert_eq!(repeats(&d)[0].next, "2026-12-06", "passed over, not retried");
+    }
+
+    /// Round 5, S2: a weekly repeat with a first date centuries back (a typo in the year, or another member's
+    /// app) posts about a year of entries at most. pinned: catch-up reaches CATCH_UP_DAYS back.
+    #[test]
+    fn repeat_backlog_is_capped() {
+        let d = doc();
+        let bank = set_account(&d, None, "Bank", "bank", 0).unwrap();
+        let food = set_envelope(&d, None, "Food", 0, "m", None, "").unwrap();
+        let mut t = exp(&bank, &food, 100);
+        t.date = "0206-11-21".into();
+        set_repeat(&d, None, "w", &t, "Ana").unwrap();
+        let mut total = 0;
+        for round in 0..20 {
+            let n = post_due(&d, "2026-11-21", round).unwrap().len();
+            total += n;
+            if n == 0 {
+                break;
+            }
+        }
+        let most = (CATCH_UP_DAYS / 7 + 1) as usize;
+        assert!(total > 0 && total <= most, "{total} entries posted (at most {most})");
+        assert!(transactions(&d).iter().all(|t| t.date.as_str() >= "2025-11-20"));
+    }
+
+    #[test]
+    fn repeat_start_window() {
+        assert!(repeat_start_ok("2026-11-21", "2026-11-21"));
+        assert!(repeat_start_ok("2025-11-21", "2026-11-21"), "a year back");
+        assert!(!repeat_start_ok("2025-11-19", "2026-11-21"));
+        assert!(!repeat_start_ok("0206-11-21", "2026-11-21"), "a typo in the year");
+        assert!(!repeat_start_ok("2036-11-21", "2026-11-21"));
+        assert!(!repeat_start_ok("2026-02-30", "2026-11-21"));
+    }
+
+    /// S2: one action removes everything a repeat posted, and stops it.
+    #[test]
+    fn remove_everything_a_repeat_posted() {
+        let d = doc();
+        let bank = set_account(&d, None, "Bank", "bank", 0).unwrap();
+        let rent = set_envelope(&d, None, "Rent", 0, "m", None, "").unwrap();
+        let mut t = exp(&bank, &rent, 50_000);
+        t.date = "2026-08-01".into();
+        let rep = set_repeat(&d, None, "m", &t, "Ana").unwrap();
+        set_tx(&d, None, &exp(&bank, &rent, 700), "Ana", 1).unwrap(); // one of their own: stays
+        assert_eq!(post_due(&d, "2026-11-20", 1).unwrap().len(), 4);
+        let gone = delete_repeat_and_entries(&d, &rep, 5).unwrap();
+        assert_eq!(gone.len(), 4);
+        assert_eq!(transactions(&d).len(), 1);
+        assert!(repeats(&d).is_empty(), "stopped");
+        assert!(post_due(&d, "2026-12-20", 6).unwrap().is_empty());
+    }
+
+    /// S4 + S6: entries another app wrote with values this one refuses count nowhere and are counted as unreadable;
+    /// sums never wrap. pinned: data from another member is checked on read.
+    #[test]
+    fn foreign_entries_are_checked_on_read() {
+        let d = doc();
+        let bank = set_account(&d, None, "Bank", "bank", 100_000).unwrap();
+        let food = set_envelope(&d, None, "Food", 0, "m", None, "").unwrap();
+        let before = budget(&d, "2026-11-21");
+        let raw = |id: &str, kind: &str, date: &str, amt: i64, parts: &[(&str, i64)]| {
+            let m = d.get_map("tx").insert_container(id, LoroMap::new()).unwrap();
+            m.insert("k", kind).unwrap();
+            m.insert("d", date).unwrap();
+            m.insert("amt", amt).unwrap();
+            m.insert("acct", bank.as_str()).unwrap();
+            let p = m.insert_container("p", LoroMap::new()).unwrap();
+            for (e, c) in parts {
+                p.insert(e, *c).unwrap();
+            }
+            d.commit();
+        };
+        raw("aaaaaaaaaaaaaaa1", "inc", "2026-11-20", i64::MAX, &[]);
+        raw("aaaaaaaaaaaaaaa2", "inc", "", i64::MAX, &[]);
+        raw("aaaaaaaaaaaaaaa3", "exp", "2026-11-20", 0, &[(food.as_str(), -5_000_000)]);
+        raw("d-2026-11-20", "inc", "2026-11-20", 100, &[]); // an id the Activity list uses for a day header
+        raw("aaaaaaaaaaaaaaa4", "exp", "2026-11-20", 100, &[(food.as_str(), 200)]); // parts don't add up
+        let after = budget(&d, "2026-11-21");
+        assert_eq!(after.available, before.available);
+        assert_eq!(after.accounts, before.accounts);
+        assert_eq!(unreadable(&d), 5);
+        assert!(transactions(&d).is_empty());
+        // Honest entries still count, and a huge but allowed amount saturates instead of wrapping.
+        set_tx(&d, None, &TxInput { kind: "inc".into(), date: "2026-11-20".into(), amount: MAX_CENTS, account: bank.clone(), ..Default::default() }, "Ana", 1).unwrap();
+        assert_eq!(budget(&d, "2026-11-21").accounts[0].balance, 100_000 + MAX_CENTS);
+    }
+
+    /// S9: text from another member is shown without control characters and clipped.
+    #[test]
+    fn foreign_text_is_cleaned() {
+        let d = doc();
+        let bank = set_account(&d, None, "Bank", "bank", 0).unwrap();
+        let id = set_tx(&d, None, &TxInput { kind: "inc".into(), date: "2026-11-20".into(), amount: 5, account: bank, ..Default::default() }, "Ana", 1).unwrap();
+        let m = child(&d, "tx", &id).unwrap();
+        m.insert("payee", "\t=evil\r\n").unwrap();
+        m.insert("note", "x".repeat(5000).as_str()).unwrap();
+        d.commit();
+        let t = &transactions(&d)[0];
+        assert_eq!(t.payee, "=evil");
+        assert_eq!(t.note.chars().count(), MAX_TEXT);
     }
 }

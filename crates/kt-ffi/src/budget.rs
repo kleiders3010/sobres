@@ -68,7 +68,11 @@ pub struct TxItem {
     pub to_name: String,
     pub payee: String,
     pub note: String,
+    /// Who entered it: the name their app stored with it.
     pub by: String,
+    /// Who changed it later, from the device that wrote the change, when that was someone else ("" if nobody;
+    /// round 5, S5).
+    pub edited_by: String,
     pub at_ms: u64,
     pub parts: Vec<PartItem>,
     /// 0 not cleared, 1 cleared (seen at the bank), 2 reconciled.
@@ -114,11 +118,50 @@ pub struct RepeatItem {
     pub tx: TxItem,
 }
 
+/// One quoted CSV field. Control characters go; a field that, after leading spaces, starts with = + - @ would
+/// start a formula in a spreadsheet and gets a leading ' (round 5, S9: texts come from every member).
+fn csv_cell(s: &str) -> String {
+    let clean: String = s.chars().filter(|c| !c.is_control()).collect();
+    let lead = clean.trim_start();
+    let s = if lead.starts_with(['=', '+', '-', '@']) && lead.parse::<f64>().is_err() { format!("'{clean}") } else { clean };
+    format!("\"{}\"", s.replace('"', "\"\""))
+}
+
+#[cfg(test)]
+mod csv_tests {
+    /// pinned: no exported cell can start a formula (round 5, S9).
+    #[test]
+    fn formulas_are_neutralised() {
+        for bad in ["=1+1", " =HYPERLINK(\"x\")", "\t=cmd", "\r@SUM(A1)", "+x", "-x"] {
+            let c = super::csv_cell(bad);
+            assert!(c.starts_with("\"'"), "{bad:?} -> {c}");
+            assert!(!c.chars().any(char::is_control));
+        }
+        assert_eq!(super::csv_cell("-12.50"), "\"-12.50\"", "amounts stay numbers");
+        assert_eq!(super::csv_cell("Rent \"May\""), "\"Rent \"\"May\"\"\"");
+    }
+}
+
 type Names = std::collections::BTreeMap<String, String>;
+/// Document peer (one per device) -> the person's name.
+type Who = std::collections::BTreeMap<u64, String>;
 
 fn item(t: b::Tx, envs: &Names, accts: &Names) -> TxItem {
+    item_by(t, envs, accts, &Who::new())
+}
+
+/// `who` names the writing devices; a device it does not know (left the budget since) keeps the stored name.
+fn item_by(t: b::Tx, envs: &Names, accts: &Names, who: &Who) -> TxItem {
     let name = |m: &Names, k: &str| m.get(k).cloned().unwrap_or_default();
+    // The stored name: a document rebuild (after a removal) re-writes every entry under the rebuilding device, so
+    // the writing device can't name the author once the budget has been rebuilt (round 5, S5: partly fixed).
+    let by = t.by.clone();
+    let edited_by = match (t.edit_peer, t.by_peer) {
+        (Some(e), b) if Some(e) != b => who.get(&e).cloned().filter(|n| *n != by).unwrap_or_default(),
+        _ => String::new(),
+    };
     TxItem {
+        edited_by,
         account_name: name(accts, &t.account),
         to_name: name(accts, &t.to),
         parts: t.parts.iter().map(|(e, c)| PartItem { envelope_name: name(envs, e), envelope_id: e.clone(), cents: *c }).collect(),
@@ -130,7 +173,7 @@ fn item(t: b::Tx, envs: &Names, accts: &Names) -> TxItem {
         to_id: t.to,
         payee: t.payee,
         note: t.note,
-        by: t.by,
+        by,
         at_ms: t.at,
         status: t.status,
     }
@@ -194,12 +237,24 @@ impl KtNode {
 
     pub fn budget_activity(&self, list_id: String) -> Result<Vec<TxItem>, KtError> {
         let l = self.list(&list_id)?;
+        let who: Who = self
+            .app
+            .people(&l)
+            .into_iter()
+            .flat_map(|p| p.devices.iter().map(|d| (kt_engine::ids::peer_id_for(d), p.name.clone())).collect::<Vec<_>>())
+            .collect();
         self.app
             .read(&l, |d| {
                 let (envs, accts) = (b::envelope_names(d), b::account_names(d));
-                b::transactions(d).into_iter().map(|t| item(t, &envs, &accts)).collect()
+                b::transactions(d).into_iter().map(|t| item_by(t, &envs, &accts, &who)).collect()
             })
             .map_err(fail)
+    }
+
+    /// How many entries of a budget could not be read (another app wrote values this one refuses; round 5, S4).
+    pub fn budget_unreadable(&self, list_id: String) -> Result<u32, KtError> {
+        let l = self.list(&list_id)?;
+        self.app.read(&l, |d| b::unreadable(d) as u32).map_err(fail)
     }
 
     /// Add (`tx_id` None) or change an entry. Returns its id.
@@ -234,6 +289,8 @@ impl KtNode {
             at: tx.at_ms,
             parts: tx.parts.into_iter().map(|p| (p.envelope_id, p.cents)).collect(),
             status: tx.status,
+            by_peer: None,
+            edit_peer: None,
         };
         self.app.edit(&l, |d| b::restore_tx(d, &t)).map_err(fail)?;
         self.notify();
@@ -352,11 +409,7 @@ impl KtNode {
     /// envelope part, so a split shows as several lines.
     pub fn export_csv(&self, list_id: String) -> Result<String, KtError> {
         let rows = self.budget_activity(list_id)?;
-        fn q(s: &str) -> String {
-            // Quote every field; a leading = + - @ would start a formula in a spreadsheet.
-            let s = if s.starts_with(['=', '+', '-', '@']) && s.parse::<f64>().is_err() { format!("'{s}") } else { s.to_string() };
-            format!("\"{}\"", s.replace('"', "\"\""))
-        }
+        let q = csv_cell;
         let money = |c: i64| format!("{}{}.{:02}", if c < 0 { "-" } else { "" }, c.abs() / 100, c.abs() % 100);
         let mut out = String::from("date,kind,payee,envelope,account,amount,note,by,status\n");
         for t in rows {
@@ -392,6 +445,10 @@ impl KtNode {
     /// [`Self::post_due`] after it to post what is due.
     pub fn set_repeating(&self, list_id: String, repeat_id: Option<String>, every: String, tx: TxEdit) -> Result<String, KtError> {
         let l = self.list(&list_id)?;
+        // A new repeat starts at most a year back (round 5, S2): no backlog of decades from a typo in the year.
+        if repeat_id.is_none() && !b::repeat_start_ok(&tx.date, &b::day_of_ms(now_ms())) {
+            return Err(fail("The first date can be at most a year back"));
+        }
         let by = self.app.display_name();
         let id = self.app.edit(&l, |d| b::set_repeat(d, repeat_id.as_deref(), &every, &input(&tx), &by)).map_err(fail)?;
         self.notify();
@@ -404,6 +461,19 @@ impl KtNode {
         self.app.edit(&l, |d| b::delete_repeat(d, &repeat_id, now_ms(), undo)).map_err(fail)?;
         self.notify();
         Ok(())
+    }
+
+    /// Stop a repeating entry and delete everything it posted (round 5, S2). Returns the deleted entries, which
+    /// `restore_tx` (with `delete_repeating(.., undo = true)`) puts back.
+    pub fn delete_repeating_and_entries(&self, list_id: String, repeat_id: String) -> Result<Vec<TxItem>, KtError> {
+        let l = self.list(&list_id)?;
+        let gone = self.app.edit(&l, |d| {
+            let (envs, accts) = (b::envelope_names(d), b::account_names(d));
+            b::delete_repeat_and_entries(d, &repeat_id, now_ms()).map(|g| g.into_iter().map(|t| item(t, &envs, &accts)).collect::<Vec<_>>())
+        });
+        let gone = gone.map_err(fail)?;
+        self.notify();
+        Ok(gone)
     }
 
     /// Post what repeating entries have due up to `today`; returns the new entries' ids (empty =

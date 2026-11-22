@@ -899,11 +899,15 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_kt_ffi_checksum_method_ktnode_budget_activity(
     ): Int
+    external fun uniffi_kt_ffi_checksum_method_ktnode_budget_unreadable(
+    ): Int
     external fun uniffi_kt_ffi_checksum_method_ktnode_delete_account(
     ): Int
     external fun uniffi_kt_ffi_checksum_method_ktnode_delete_envelope(
     ): Int
     external fun uniffi_kt_ffi_checksum_method_ktnode_delete_repeating(
+    ): Int
+    external fun uniffi_kt_ffi_checksum_method_ktnode_delete_repeating_and_entries(
     ): Int
     external fun uniffi_kt_ffi_checksum_method_ktnode_delete_tx(
     ): Int
@@ -1137,12 +1141,16 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_kt_ffi_fn_method_ktnode_budget_activity(`ptr`: Long,`listId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_kt_ffi_fn_method_ktnode_budget_unreadable(`ptr`: Long,`listId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Int
     external fun uniffi_kt_ffi_fn_method_ktnode_delete_account(`ptr`: Long,`listId`: RustBuffer.ByValue,`accountId`: RustBuffer.ByValue,`undo`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_kt_ffi_fn_method_ktnode_delete_envelope(`ptr`: Long,`listId`: RustBuffer.ByValue,`envelopeId`: RustBuffer.ByValue,`undo`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_kt_ffi_fn_method_ktnode_delete_repeating(`ptr`: Long,`listId`: RustBuffer.ByValue,`repeatId`: RustBuffer.ByValue,`undo`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_kt_ffi_fn_method_ktnode_delete_repeating_and_entries(`ptr`: Long,`listId`: RustBuffer.ByValue,`repeatId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_kt_ffi_fn_method_ktnode_delete_tx(`ptr`: Long,`listId`: RustBuffer.ByValue,`txId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_kt_ffi_fn_method_ktnode_export_csv(`ptr`: Long,`listId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1583,6 +1591,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_kt_ffi_checksum_method_ktnode_budget_activity() and 0xFFFF) != 14244) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_kt_ffi_checksum_method_ktnode_budget_unreadable() and 0xFFFF) != 29562) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_kt_ffi_checksum_method_ktnode_delete_account() and 0xFFFF) != 20588) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1590,6 +1601,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_kt_ffi_checksum_method_ktnode_delete_repeating() and 0xFFFF) != 37582) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_kt_ffi_checksum_method_ktnode_delete_repeating_and_entries() and 0xFFFF) != 33528) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_kt_ffi_checksum_method_ktnode_delete_tx() and 0xFFFF) != 61966) {
@@ -3232,6 +3246,11 @@ public interface KtNodeInterface {
     
     fun `budgetActivity`(`listId`: kotlin.String): List<TxItem>
     
+    /**
+     * How many entries of a budget could not be read (another app wrote values this one refuses; round 5, S4).
+     */
+    fun `budgetUnreadable`(`listId`: kotlin.String): kotlin.UInt
+    
     fun `deleteAccount`(`listId`: kotlin.String, `accountId`: kotlin.String, `undo`: kotlin.Boolean)
     
     fun `deleteEnvelope`(`listId`: kotlin.String, `envelopeId`: kotlin.String, `undo`: kotlin.Boolean)
@@ -3240,6 +3259,12 @@ public interface KtNodeInterface {
      * Stop a repeating entry (what it posted stays); `undo` starts it again.
      */
     fun `deleteRepeating`(`listId`: kotlin.String, `repeatId`: kotlin.String, `undo`: kotlin.Boolean)
+    
+    /**
+     * Stop a repeating entry and delete everything it posted (round 5, S2). Returns the deleted entries, which
+     * `restore_tx` (with `delete_repeating(.., undo = true)`) puts back.
+     */
+    fun `deleteRepeatingAndEntries`(`listId`: kotlin.String, `repeatId`: kotlin.String): List<TxItem>
     
     fun `deleteTx`(`listId`: kotlin.String, `txId`: kotlin.String)
     
@@ -4726,6 +4751,24 @@ open class KtNode: Disposable, AutoCloseable, KtNodeInterface
     
 
     
+    /**
+     * How many entries of a budget could not be read (another app wrote values this one refuses; round 5, S4).
+     */
+    @Throws(KtException::class)override fun `budgetUnreadable`(`listId`: kotlin.String): kotlin.UInt {
+            return FfiConverterUInt.lift(
+    callWithHandle {
+    uniffiRustCallWithError(KtException) { _status ->
+    UniffiLib.uniffi_kt_ffi_fn_method_ktnode_budget_unreadable(
+        it,
+        
+        FfiConverterString.lower(`listId`),_status)
+}
+    }
+    )
+    }
+    
+
+    
     @Throws(KtException::class)override fun `deleteAccount`(`listId`: kotlin.String, `accountId`: kotlin.String, `undo`: kotlin.Boolean)
         = 
     callWithHandle {
@@ -4774,6 +4817,26 @@ open class KtNode: Disposable, AutoCloseable, KtNodeInterface
 }
     }
     
+    
+
+    
+    /**
+     * Stop a repeating entry and delete everything it posted (round 5, S2). Returns the deleted entries, which
+     * `restore_tx` (with `delete_repeating(.., undo = true)`) puts back.
+     */
+    @Throws(KtException::class)override fun `deleteRepeatingAndEntries`(`listId`: kotlin.String, `repeatId`: kotlin.String): List<TxItem> {
+            return FfiConverterSequenceTypeTxItem.lift(
+    callWithHandle {
+    uniffiRustCallWithError(KtException) { _status ->
+    UniffiLib.uniffi_kt_ffi_fn_method_ktnode_delete_repeating_and_entries(
+        it,
+        
+        FfiConverterString.lower(`listId`),
+        FfiConverterString.lower(`repeatId`),_status)
+}
+    }
+    )
+    }
     
 
     
@@ -7294,7 +7357,16 @@ data class TxItem (
     , 
     var `note`: kotlin.String
     , 
+    /**
+     * Who entered it: the name their app stored with it.
+     */
     var `by`: kotlin.String
+    , 
+    /**
+     * Who changed it later, from the device that wrote the change, when that was someone else ("" if nobody;
+     * round 5, S5).
+     */
+    var `editedBy`: kotlin.String
     , 
     var `atMs`: kotlin.ULong
     , 
@@ -7331,6 +7403,7 @@ public object FfiConverterTypeTxItem: FfiConverterRustBuffer<TxItem> {
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
             FfiConverterULong.read(buf),
             FfiConverterSequenceTypePartItem.read(buf),
             FfiConverterLong.read(buf),
@@ -7349,6 +7422,7 @@ public object FfiConverterTypeTxItem: FfiConverterRustBuffer<TxItem> {
             FfiConverterString.allocationSize(value.`payee`) +
             FfiConverterString.allocationSize(value.`note`) +
             FfiConverterString.allocationSize(value.`by`) +
+            FfiConverterString.allocationSize(value.`editedBy`) +
             FfiConverterULong.allocationSize(value.`atMs`) +
             FfiConverterSequenceTypePartItem.allocationSize(value.`parts`) +
             FfiConverterLong.allocationSize(value.`status`)
@@ -7366,6 +7440,7 @@ public object FfiConverterTypeTxItem: FfiConverterRustBuffer<TxItem> {
             FfiConverterString.write(value.`payee`, buf)
             FfiConverterString.write(value.`note`, buf)
             FfiConverterString.write(value.`by`, buf)
+            FfiConverterString.write(value.`editedBy`, buf)
             FfiConverterULong.write(value.`atMs`, buf)
             FfiConverterSequenceTypePartItem.write(value.`parts`, buf)
             FfiConverterLong.write(value.`status`, buf)

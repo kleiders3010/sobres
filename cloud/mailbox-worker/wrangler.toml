@@ -16,11 +16,11 @@ tag = "v1"
 new_sqlite_classes = ["Topic"]
 
 # Budgets per network (IPv6 /64), checked in the Worker before a Durable Object wakes (safety audit round 4,
-# T4). A device reads its topics every few rounds; these sit far above a household on one address.
+# T4; round 5, S10: reads 600 -> 300). A device reads its topics every few rounds; these sit above a household on one address.
 [[ratelimits]]
 name = "READS"
 namespace_id = "2107"
-simple = { limit = 600, period = 60 }
+simple = { limit = 300, period = 60 }
 
 [[ratelimits]]
 name = "WRITES"

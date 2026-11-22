@@ -89,7 +89,9 @@ export default {
     // layers (helpers, relays, direct).
     const net = netOf(req.headers.get("CF-Connecting-IP"));
     const limit = req.method === "PUT" ? env.WRITES : env.READS;
-    if (limit && !(await limit.limit({ key: net })).success) return new Response("slow down", { status: 429, headers: { "Retry-After": "60" } });
+    // Fails closed (round 5, S10): a deploy that lost its limit binding answers 503 instead of running unlimited.
+    if (!limit) return new Response("limits missing", { status: 503, headers: { "Retry-After": "300" } });
+    if (!(await limit.limit({ key: net })).success) return new Response("slow down", { status: 429, headers: { "Retry-After": "60" } });
     if (req.method === "PUT") {
       const cl = req.headers.get("Content-Length");
       if (cl === null) return new Response("length required", { status: 411 });

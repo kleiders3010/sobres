@@ -232,7 +232,9 @@ impl App {
         }
         r.doc(&new.personal, &new.profile).ok_or(Error::NotFound)?.get_map("profile").insert("name", name.as_str()).map_err(eng)?;
         r.commit(&new.personal, &new.profile).map_err(eng)?;
-        // Undo removed it from every group: nothing there it can read anymore.
+        // Undo removed it from every group: nothing there it can read anymore. Shared lists are not copied: they
+        // are other people's too, and an unlinked device (old or stolen) keeps none of them (round 5: kept so;
+        // a wrongful removal is what S1's rules now prevent).
         for g in r.groups() {
             if r.epochs(&g).is_some_and(|e| e.removed_devices().contains(&me)) {
                 r.forget_group(&g).map_err(eng)?;

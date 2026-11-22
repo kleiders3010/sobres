@@ -638,6 +638,41 @@ fn write_due(changed_at: Option<std::time::Instant>, last_write: std::time::Inst
     changed_at.is_some_and(|t| now.duration_since(t) >= WRITE_PAUSE) && now.duration_since(last_write) >= WRITE_GAP
 }
 
+/// Storage lines of the diagnostics (sent with feedback): "Your own" and "Shared 1", "Shared 2"..., never a name.
+fn storage_labels(personal: &[bool]) -> Vec<String> {
+    let mut shared = 0;
+    personal
+        .iter()
+        .map(|p| {
+            if *p {
+                "Your own".to_string()
+            } else {
+                shared += 1;
+                format!("Shared {shared}")
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod diagnostics_privacy {
+    /// pinned: diagnostics carry no budget, list or group names (round 5, S7) and report the app's own version.
+    #[test]
+    fn no_names_and_the_apps_version() {
+        assert_eq!(super::storage_labels(&[true, false, false]), ["Your own", "Shared 1", "Shared 2"]);
+        let src = include_str!("lib.rs");
+        let start = src.find("pub fn diagnostics(&self)").unwrap();
+        let body = &src[start..start + src[start..].find("        Diagnostics {").unwrap()];
+        assert!(!body.contains("g.name") && !body.contains("list_name"), "diagnostics must not read a name");
+        let gradle = include_str!("../../../app/android/build.gradle.kts");
+        assert!(gradle.contains(&format!("versionName = \"{}\"", env!("CARGO_PKG_VERSION"))), "Cargo version = app version");
+        // The desktop's own code is the Android one: otherwise the update notice offers the version already running.
+        let code = gradle.split("versionCode = ").nth(1).unwrap().split_whitespace().next().unwrap();
+        let main = include_str!("../../../app/desktop/src/main/kotlin/com/jurisgames/sobres/desktop/Main.kt");
+        assert!(main.contains(&format!("const val VERSION_CODE = {code}uL")), "desktop VERSION_CODE = versionCode {code}");
+    }
+}
+
 #[cfg(test)]
 mod write_timing {
     use super::*;
@@ -1008,6 +1043,8 @@ impl KtNode {
 impl KtNode {
     fn start(identity_dir: String, data_dir: String, worker_path: String, options: NodeOptions, restore: Option<Vec<u8>>, picked: bool) -> Result<Arc<KtNode>, KtError> {
         vault::use_builtin();
+        // Sobres codes are never found by Tasks and the other way round (round 5, S13).
+        kt_engine::invite::set_app_tag("sobres");
         let sandbox = SandboxConfig { worker: PathBuf::from(worker_path), timeout: Duration::from_secs(20) };
         let data = PathBuf::from(&data_dir);
         let identity = PathBuf::from(identity_dir);
@@ -1654,7 +1691,7 @@ impl KtNode {
     /// "windows" or "linux" (which link the notice opens). Reads the static manifest
     /// (apps.jurisgames.com, then GitHub).
     pub fn check_update(&self, current_version_code: u64, channel: String) -> Option<UpdateItem> {
-        use kt_net::update::{check, Channel, MANIFEST_URLS};
+        use kt_net::update::{check_since, Channel, MANIFEST_URLS};
         let ch = match channel.as_str() {
             "play" => Channel::Play,
             "apk" => Channel::Apk,
@@ -1662,9 +1699,14 @@ impl KtNode {
             "linux" => Channel::Linux,
             _ => return None,
         };
-        self.rt
-            .block_on(check(&MANIFEST_URLS, "sobres", current_version_code, ch))
-            .map(|u| UpdateItem { version_name: u.version_name, link: u.link })
+        // The newest signed file's serial seen so far: an older signed copy is refused (round 5, S11).
+        let path = self.data_dir.join("update_serial");
+        let seen: u64 = std::fs::read_to_string(&path).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+        let (found, serial) = self.rt.block_on(check_since(&MANIFEST_URLS, "sobres", current_version_code, ch, seen));
+        if serial > seen {
+            let _ = kt_engine::storage::write_atomic(&path, serial.to_string().as_bytes());
+        }
+        found.map(|u| UpdateItem { version_name: u.version_name, link: u.link })
     }
 
     /// The user is looking: nothing so far needs a notification.
@@ -1973,14 +2015,14 @@ impl KtNode {
                 Some(Some(true)) => "on, reachable and announced".into(),
             },
         });
-        let storage = self
-            .app
-            .groups()
-            .into_iter()
-            .map(|g| GroupStorage {
-                name: if g.personal { "Your own lists".into() } else { g.name },
-                bytes: dir_bytes(&self.data_dir.join("groups").join(g.group.to_hex())),
-            })
+        // Never a name (round 5, S7): these lines go out with feedback, and a shared group's name is what people
+        // called their budget. Counters only.
+        let groups = self.app.groups();
+        let labels = storage_labels(&groups.iter().map(|g| g.personal).collect::<Vec<_>>());
+        let storage = groups
+            .iter()
+            .zip(labels)
+            .map(|(g, name)| GroupStorage { name, bytes: dir_bytes(&self.data_dir.join("groups").join(g.group.to_hex())) })
             .collect();
         Diagnostics {
             version: env!("CARGO_PKG_VERSION").into(),

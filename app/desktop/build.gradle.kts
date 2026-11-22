@@ -23,7 +23,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(org.jetbrains.compose.desktop.application.dsl.TargetFormat.Msi)
             packageName = "Sobres"
-            packageVersion = "1.0.1"
+            packageVersion = "1.0.2"
             vendor = "Juris Games"
             description = "Shared envelope budget, no accounts, no servers"
             // JNA needs sun.misc.Unsafe; the rest is Compose's default runtime.

@@ -123,6 +123,15 @@ impl CodeKind {
     }
 }
 
+static APP_TAG: OnceLock<String> = OnceLock::new();
+
+/// Apps that share this engine tag their codes (safety audit round 5, S13): a code made in one app is never found
+/// by another, so it can't join a group the other app's code wasn't written for. Tasks has no tag (its codes stay
+/// as they were); call once at start, before any code is made or read.
+pub fn set_app_tag(tag: &str) {
+    let _ = APP_TAG.set(tag.to_string());
+}
+
 /// UTC day number (days since 1970-01-01).
 pub fn day_of(ms: u64) -> u32 {
     (ms / 86_400_000) as u32
@@ -131,10 +140,19 @@ pub fn day_of(ms: u64) -> u32 {
 /// The day's lookup key (where the record lives) and record key (how it's sealed).
 /// Costs one Argon2id run (~0.2–0.8 s on a phone).
 pub fn derive(code: &Code, kind: CodeKind, day: u32) -> Result<([u8; 32], SymKey)> {
+    derive_for(code, kind, day, APP_TAG.get().map(String::as_str))
+}
+
+/// [`derive`] for a given app tag (`None` / empty: Tasks).
+pub fn derive_for(code: &Code, kind: CodeKind, day: u32, tag: Option<&str>) -> Result<([u8; 32], SymKey)> {
     use argon2::{Algorithm, Argon2, Params, Version};
     let params = Params::new(ARGON2_M_KIB, ARGON2_T, ARGON2_P, Some(64)).map_err(|e| Error::Invalid(e.to_string()))?;
     let a = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut salt = kind.domain().as_bytes().to_vec();
+    if let Some(tag) = tag.filter(|t| !t.is_empty()) {
+        salt.push(b'/');
+        salt.extend_from_slice(tag.as_bytes());
+    }
     salt.extend_from_slice(&day.to_le_bytes());
     let mut out = [0u8; 64];
     a.hash_password_into(&code.canonical(), &salt, &mut out).map_err(|e| Error::Invalid(e.to_string()))?;
@@ -200,6 +218,10 @@ mod tests {
         let (l2, _) = derive(&c, CodeKind::Invite, 20_001).unwrap();
         let (l3, _) = derive(&c, CodeKind::Link, 20_000).unwrap();
         assert!(l1 != l2 && l1 != l3, "lookup keys differ by day and kind");
+        // S13: another app's code is never found here. pinned: Tasks codes are untagged.
+        let (l4, _) = derive_for(&c, CodeKind::Invite, 20_000, Some("sobres")).unwrap();
+        let (l5, _) = derive_for(&c, CodeKind::Invite, 20_000, Some("")).unwrap();
+        assert!(l4 != l1 && l5 == l1, "a tag changes the lookup; no tag is the Tasks one");
         let r = InviteRecord {
             kind: CodeKind::Invite,
             group: GroupId([1; 32]),

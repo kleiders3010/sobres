@@ -239,6 +239,11 @@ impl Replica {
         for g in self.layout.groups()? {
             self.accepted_groups.insert(g);
             let mut state = GroupState { epochs: GroupEpochs::new(g), keys: HashMap::new(), docs: BTreeMap::new(), new_records: Vec::new() };
+            // The invite's epoch decides which genesis counts (S8), also across a restart.
+            let anchors: Vec<(EpochId, [u8; 32])> = std::fs::read(self.layout.group_dir(&g).join("invite_keys")).ok().and_then(|b| postcard::from_bytes(&b).ok()).unwrap_or_default();
+            for (e, _) in &anchors {
+                state.epochs.set_anchor(*e);
+            }
             for rec in storage::read_records(&self.layout.control_log(&g))? {
                 if let Ok(r) = EpochRecord::decode(&rec) {
                     let _ = state.epochs.insert(r);
@@ -346,6 +351,7 @@ impl Replica {
             new_records: Vec::new(),
         });
         state.keys.insert(epoch, key.clone());
+        state.epochs.set_anchor(epoch);
         // Kept with the group: the next process (app restart, background job) still reads.
         let _ = std::fs::create_dir_all(self.layout.group_dir(&g));
         let path = self.layout.group_dir(&g).join("invite_keys");

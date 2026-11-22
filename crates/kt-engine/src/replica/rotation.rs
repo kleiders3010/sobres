@@ -36,6 +36,10 @@ impl Replica {
                 continue;
             }
             let Some(rec) = state.epochs.record(&head) else { continue };
+            // Already made one on this head that does not count: never make another each round (round 5, S1).
+            if state.epochs.all_records().any(|r| r.body.creator == me && r.body.parents == [head] && !state.epochs.is_valid(&r.id())) {
+                continue;
+            }
             let Some(recipients) = state.epochs.recipients(&head) else { continue };
             let mut order: Vec<[u8; 32]> = recipients.keys().map(|d| crypto::hash("kt/rotate-turn/v1", &[head.0.as_slice(), d.0.as_slice()].concat())).collect();
             order.sort();

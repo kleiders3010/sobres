@@ -139,7 +139,7 @@ Principle 10 limits *behavioral* settings. **Appearance options** are a separate
   7. **Periodic rotation** about every 30 days and on every device add, which heals silent leaks.
   8. After the personal group rotates, Block Store is updated at once.
   - Also: version, group, epoch, slot and sender are bound as AEAD associated data; a hybrid post-quantum suite ID is reserved; every join notifies the group.
-  - **Removing a device or a person** is a rotation. They keep what they had and get nothing new. Mutual removal (A removes B while B removes A) removes both.
+  - **Removing a device or a person** is a rotation. They keep what they had and get nothing new. Mutual removal (A removes B while B removes A) has one winner: the removal another member already built on, otherwise the device that joined first (safety audit round 5: "removes both" let a removed device take its remover out with it). A removal signed by a device that a counting removal removes changes nothing.
 - **Membership:** anyone in the group is a full author; no roles. **Leaving** is local. A professional mode with roles can come later without engine changes.
 - **Solo lists are groups with one member**: one code path.
 - **Invites: one mechanism, three wrappers (D7, D8, D55):**
