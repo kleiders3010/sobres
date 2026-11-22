@@ -87,6 +87,7 @@ object Feedback {
         c.connectTimeout = 15_000
         c.readTimeout = 20_000
         c.setRequestProperty("Content-Type", "application/json")
+        c.setRequestProperty("User-Agent", "Sobres") // safety round 6: our own name, not the system default (phone model, Android version)
         c.outputStream.use { it.write(body.toByteArray()) }
         val code = c.responseCode
         val answer = (if (code < 400) c.inputStream else c.errorStream)?.bufferedReader()?.readText() ?: ""
