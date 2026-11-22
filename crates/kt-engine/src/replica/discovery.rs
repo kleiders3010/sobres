@@ -179,12 +179,16 @@ impl Replica {
     pub fn group_point(&self, g: &GroupId, day: u32) -> Option<[u8; 32]> {
         let state = self.groups.get(g)?;
         // Members: the working head's key. A joiner without the epoch records yet: the key
-        // its invite carried (the same epoch, unless the group rotated since).
+        // its invite carried (the same epoch, unless the group rotated since), or with a
+        // door-only invite (T10) the point its record carried for that day.
         let key = match state.epochs.working_head().and_then(|h| state.keys.get(&h)) {
             Some(k) => k,
             None => {
                 let p = self.pending_joins().into_iter().find(|p| p.group == *g)?;
-                state.keys.get(&p.epoch)?
+                match state.keys.get(&p.epoch) {
+                    Some(k) => k,
+                    None => return std::fs::read(self.layout.group_dir(g).join("join_point")).ok()?.try_into().ok(),
+                }
             }
         };
         let mut m = key.0.to_vec();

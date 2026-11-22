@@ -218,15 +218,9 @@ async fn joining_days_later_while_the_inviter_is_offline() {
     assert!(matches!(source, kt_net::invite_net::Source::Helpers), "{source:?}");
     assert!(!join(&b.s, Some(&b.p2p), &rec).await.unwrap(), "A is offline: not in yet");
     b.s.sync_once().await;
-    assert!(b.value(&g, &d).contains("milk"), "B already sees the list while waiting");
+    // pinned: the words only let B ask (audit T10): nothing of the list until a member lets B in.
+    assert!(!b.value(&g, &d).contains("milk"), "B reads nothing while waiting");
     assert!(!b.member_of(&g));
-    // B edits while waiting.
-    {
-        let r = b.s.replica();
-        let mut r = r.lock().unwrap();
-        r.doc(&g, &d).unwrap().get_map("tasks").insert("t2", "from B while waiting").unwrap();
-        r.commit(&g, &d).unwrap();
-    }
 
     // A comes back: its device reads the request at the helpers and lets B in.
     let a = Device::from_replica(a_rep, &bs).await;
@@ -235,10 +229,25 @@ async fn joining_days_later_while_the_inviter_is_offline() {
         a.s.sync_once().await;
         b.maintain().await;
         b.s.sync_once().await;
-        if b.member_of(&g) && a.value(&g, &d).contains("from B while waiting") {
+        if b.member_of(&g) && b.value(&g, &d).contains("milk") {
             break;
         }
     }
     assert!(b.member_of(&g), "A accepted B when it came back");
-    assert!(a.value(&g, &d).contains("from B while waiting"), "B's waiting edit arrived");
+    assert!(b.value(&g, &d).contains("milk"), "and B reads the list");
+    // B's first edit as a member reaches A.
+    {
+        let r = b.s.replica();
+        let mut r = r.lock().unwrap();
+        r.doc(&g, &d).unwrap().get_map("tasks").insert("t2", "from B").unwrap();
+        r.commit(&g, &d).unwrap();
+    }
+    for _ in 0..3 {
+        b.s.sync_once().await;
+        a.s.sync_once().await;
+        if a.value(&g, &d).contains("from B") {
+            break;
+        }
+    }
+    assert!(a.value(&g, &d).contains("from B"), "B's edit arrived");
 }

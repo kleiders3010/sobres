@@ -164,7 +164,8 @@ impl Replica {
                         kind: CodeKind::Invite,
                         group: g,
                         epoch: head,
-                        epoch_key: key.0,
+                        epoch_key: Some(key.0),
+                        door: None,
                         invite_id: *invite_id,
                         expires_ms: *expires,
                         group_name: String::new(),
@@ -172,6 +173,7 @@ impl Replica {
                         whereabouts: None,
                         published_ms: super::now_ms(),
                         hints: self.invite_hints_for_restore(&g),
+                        point: None,
                     };
                     self.begin_join(&rec)?;
                     out.push(Restored::Rejoining(g));

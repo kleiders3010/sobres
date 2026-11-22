@@ -161,13 +161,28 @@ pub fn derive_for(code: &Code, kind: CodeKind, day: u32, tag: Option<&str>) -> R
     Ok((lookup, key))
 }
 
+/// The invite's door (safety audit T10): a key only the code gives, which opens the joiners' requests and the
+/// members' answers, never the group. Members and the joiner derive it from the code.
+pub fn door_key(code: &Code, group: &GroupId) -> [u8; 32] {
+    crypto::derive(&code.canonical(), "kt/invite-door/v1", &group.0).0
+}
+
+/// The made-up epoch id a door's slots live under (so topics and slot sealing work as for an epoch).
+pub fn door_epoch(door: &[u8; 32]) -> EpochId {
+    EpochId(crypto::hash("kt/invite-door-epoch/v1", door))
+}
+
 /// What an invite (or link) record tells the joiner.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InviteRecord {
     pub kind: CodeKind,
     pub group: GroupId,
+    /// The epoch the invite was published under: decides which genesis counts (S8).
     pub epoch: EpochId,
-    pub epoch_key: [u8; 32],
+    /// Records format 1 (older apps) and a backup's own rejoin: the group's key itself. Format 2 never carries it.
+    pub epoch_key: Option<[u8; 32]>,
+    /// Format 2: the invite's door ([`door_key`]); the joiner can only ask, and reads the group once let in.
+    pub door: Option<[u8; 32]>,
     pub invite_id: [u8; 32],
     pub expires_ms: u64,
     pub group_name: String,
@@ -180,16 +195,124 @@ pub struct InviteRecord {
     /// helper)), so the joiner writes its request where members look and knows a helper
     /// from the start, even without Nostr.
     pub hints: Vec<(String, String)>,
+    /// Format 2: the group's helper point for this record's day (§7a), so a joiner without the key can still
+    /// find the group's helpers when the hints are gone.
+    pub point: Option<[u8; 32]>,
 }
 
+/// Records format 1, as older apps write and read them (the field order is the format).
+#[derive(Serialize, Deserialize)]
+struct RecordV1 {
+    kind: CodeKind,
+    group: GroupId,
+    epoch: EpochId,
+    epoch_key: [u8; 32],
+    invite_id: [u8; 32],
+    expires_ms: u64,
+    group_name: String,
+    inviter_name: String,
+    whereabouts: Option<Vec<u8>>,
+    published_ms: u64,
+    hints: Vec<(String, String)>,
+}
+
+/// Records format 2: the door instead of the key.
+#[derive(Serialize, Deserialize)]
+struct RecordV2 {
+    kind: CodeKind,
+    group: GroupId,
+    epoch: EpochId,
+    door: [u8; 32],
+    invite_id: [u8; 32],
+    expires_ms: u64,
+    group_name: String,
+    inviter_name: String,
+    whereabouts: Option<Vec<u8>>,
+    published_ms: u64,
+    hints: Vec<(String, String)>,
+    point: Option<[u8; 32]>,
+}
+
+/// Seal a record: format 2 when it has a door, else format 1 (only a record that carries the key, as older apps
+/// make them).
 pub fn seal_record(r: &InviteRecord, lookup: &[u8; 32], key: &SymKey) -> Result<Vec<u8>> {
-    let b = wire::encode(RECORD_TAG, 1, r)?;
+    let b = match (r.door, r.epoch_key) {
+        (Some(door), _) => wire::encode(
+            RECORD_TAG,
+            2,
+            &RecordV2 {
+                kind: r.kind,
+                group: r.group,
+                epoch: r.epoch,
+                door,
+                invite_id: r.invite_id,
+                expires_ms: r.expires_ms,
+                group_name: r.group_name.clone(),
+                inviter_name: r.inviter_name.clone(),
+                whereabouts: r.whereabouts.clone(),
+                published_ms: r.published_ms,
+                hints: r.hints.clone(),
+                point: r.point,
+            },
+        )?,
+        (None, Some(epoch_key)) => wire::encode(
+            RECORD_TAG,
+            1,
+            &RecordV1 {
+                kind: r.kind,
+                group: r.group,
+                epoch: r.epoch,
+                epoch_key,
+                invite_id: r.invite_id,
+                expires_ms: r.expires_ms,
+                group_name: r.group_name.clone(),
+                inviter_name: r.inviter_name.clone(),
+                whereabouts: r.whereabouts.clone(),
+                published_ms: r.published_ms,
+                hints: r.hints.clone(),
+            },
+        )?,
+        (None, None) => return Err(Error::Invalid("a record needs a door".into())),
+    };
     Ok(crypto::seal(key, lookup, &b))
 }
 
 pub fn open_record(sealed: &[u8], lookup: &[u8; 32], key: &SymKey) -> Result<InviteRecord> {
     let b = crypto::open(key, lookup, sealed)?;
-    Ok(wire::decode(RECORD_TAG, 1, &b)?.1)
+    if b.len() >= 4 && u16::from_le_bytes([b[2], b[3]]) == 1 {
+        let r: RecordV1 = wire::decode(RECORD_TAG, 1, &b)?.1;
+        return Ok(InviteRecord {
+            kind: r.kind,
+            group: r.group,
+            epoch: r.epoch,
+            epoch_key: Some(r.epoch_key),
+            door: None,
+            invite_id: r.invite_id,
+            expires_ms: r.expires_ms,
+            group_name: r.group_name,
+            inviter_name: r.inviter_name,
+            whereabouts: r.whereabouts,
+            published_ms: r.published_ms,
+            hints: r.hints,
+            point: None,
+        });
+    }
+    let r: RecordV2 = wire::decode(RECORD_TAG, 2, &b)?.1;
+    Ok(InviteRecord {
+        kind: r.kind,
+        group: r.group,
+        epoch: r.epoch,
+        epoch_key: None,
+        door: Some(r.door),
+        invite_id: r.invite_id,
+        expires_ms: r.expires_ms,
+        group_name: r.group_name,
+        inviter_name: r.inviter_name,
+        whereabouts: r.whereabouts,
+        published_ms: r.published_ms,
+        hints: r.hints,
+        point: r.point,
+    })
 }
 
 #[cfg(test)]
@@ -226,7 +349,8 @@ mod tests {
             kind: CodeKind::Invite,
             group: GroupId([1; 32]),
             epoch: EpochId([2; 32]),
-            epoch_key: [3; 32],
+            epoch_key: None,
+            door: Some(door_key(&c, &GroupId([1; 32]))),
             invite_id: c.id(),
             expires_ms: 5,
             group_name: "Family".into(),
@@ -234,9 +358,16 @@ mod tests {
             whereabouts: None,
             published_ms: 1,
             hints: vec![],
+            point: Some([4; 32]),
         };
         let s = seal_record(&r, &l1, &k1).unwrap();
         assert_eq!(open_record(&s, &l1, &k1).unwrap(), r);
         assert!(open_record(&s, &l2, &k1).is_err());
+        // pinned: format 2 never carries the group's key (audit T10); format 1 records from older apps still open.
+        assert_eq!(u16::from_le_bytes(crypto::open(&k1, &l1, &s).unwrap()[2..4].try_into().unwrap()), 2);
+        let old = InviteRecord { epoch_key: Some([3; 32]), door: None, point: None, ..r.clone() };
+        let s1 = seal_record(&old, &l1, &k1).unwrap();
+        assert_eq!(open_record(&s1, &l1, &k1).unwrap(), old);
+        assert!(seal_record(&InviteRecord { door: None, ..r }, &l1, &k1).is_err());
     }
 }

@@ -104,6 +104,70 @@ fn joining_with_only_the_words() {
 }
 
 #[test]
+fn the_words_only_let_you_ask() {
+    // pinned: an invite record never carries the group's key (audit T10). Someone who has the words reads
+    // nothing until a member lets them in, and being let in is announced like any join.
+    let mut net = Net::default();
+    let (mut a, mut eve) = (dev("ta"), dev("te"));
+    let g = a.create_group().unwrap();
+    let d = a.create_doc(&g).unwrap();
+    a.doc(&g, &d).unwrap().get_map("tasks").insert("t1", "secret").unwrap();
+    a.commit(&g, &d).unwrap();
+    let (code, _) = a.create_invite(&g, CodeKind::Invite, MONTH).unwrap();
+    net.sync(&mut [&mut a]);
+    let rec = net.lookup(&code.to_text(), CodeKind::Invite).unwrap();
+    assert!(rec.epoch_key.is_none() && rec.door.is_some(), "the record holds a door, not the key");
+    // Every slot the group wrote is on the board; with only the words, none of the group opens.
+    eve.begin_join(&rec).unwrap();
+    net.sync(&mut [&mut eve]);
+    assert!(!value(&eve, &g, &d).contains("secret"), "nothing to read before a member answers");
+    assert!(!eve.epochs(&g).is_some_and(|x| x.is_current_member(&eve.device_id())));
+    // A member answers: now Eve is a member everyone can see, and reads the group.
+    net.sync(&mut [&mut a, &mut eve]);
+    assert!(a.take_events().iter().any(|e| matches!(e, Event::DeviceJoined { via_link: false, .. })));
+    assert!(eve.epochs(&g).unwrap().is_current_member(&eve.device_id()));
+    assert!(value(&eve, &g, &d).contains("secret"));
+    assert_eq!(eve.settle_joins().len(), 1);
+}
+
+fn files_named(dir: &std::path::Path, name: &str, out: &mut Vec<PathBuf>) {
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            files_named(&p, name, out);
+        } else if p.file_name().is_some_and(|n| n == name) {
+            out.push(p);
+        }
+    }
+}
+
+#[test]
+fn keys_kept_outside_the_records_are_sealed_at_rest() {
+    // pinned: group keys a device keeps outside its epoch records (a backup's, an older invite's) are sealed with a
+    // key only the device's own key gives (audit T15e); they still work after a restart.
+    let mut a = dev("ka");
+    let g = a.create_group().unwrap();
+    let b = a.make_backup(MONTH, vec![]).unwrap();
+    let keys: Vec<[u8; 32]> = b.groups.iter().flat_map(|x| x.keys.iter().map(|(_, k)| *k)).collect();
+    assert!(!keys.is_empty());
+    let root = std::env::temp_dir().join(format!("kt-inv-rest-{}-{}", std::process::id(), rand::random::<u32>()));
+    let sb = SandboxConfig { worker: PathBuf::from(env!("CARGO_BIN_EXE_kt-import-worker")), timeout: Duration::from_secs(20) };
+    {
+        let mut n = Replica::open(&root.join("identity"), &root.join("data"), sb.clone()).unwrap();
+        n.restore_backup(&b).unwrap();
+    }
+    let mut found = Vec::new();
+    files_named(&root, "invite_keys", &mut found);
+    assert!(!found.is_empty(), "the restored keys are kept");
+    for f in &found {
+        let bytes = std::fs::read(f).unwrap();
+        assert!(keys.iter().all(|k| !bytes.windows(32).any(|w| w == k)), "no key in the clear");
+    }
+    let n = Replica::open(&root.join("identity"), &root.join("data"), sb).unwrap();
+    assert!(n.read_topics().iter().any(|t| t.group == g), "still readable after a restart");
+}
+
+#[test]
 fn link_codes_are_refused_on_the_join_path() {
     let mut net = Net::default();
     let mut a = dev("la");

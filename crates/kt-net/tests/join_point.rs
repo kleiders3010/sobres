@@ -1,5 +1,5 @@
-//! First joins when the invite's helper hints are gone (DESIGN §7a): the joiner computes
-//! the group's secret daily point from the key its invite carried and looks at the
+//! First joins when the invite's helper hints are gone (DESIGN §7a): the joiner takes
+//! the group's secret daily point its invite record carried and looks at the
 //! helpers closest to it, the same rule members use to choose their helper set, so it
 //! lands on the group's helpers without any hint.
 

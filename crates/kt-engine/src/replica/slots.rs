@@ -213,6 +213,18 @@ impl Replica {
                     push(e, SlotRole::Forward);
                 }
             }
+            // ...and the doors they asked at (T10): the answer there is the group's epoch records.
+            let answering = self.answer_epochs(g);
+            for (e, key) in self.read_doors(g) {
+                let asked = answering.iter().any(|(x, since)| *x == e && now.saturating_sub(*since) < FORWARD_WINDOW_MS);
+                if asked && !out.iter().any(|t| t.group == *g && t.epoch == e) {
+                    let mut info = Vec::with_capacity(64);
+                    info.extend_from_slice(&g.0);
+                    info.extend_from_slice(&e.0);
+                    let seed = crypto::derive(&self.identity.secret().to_bytes(), "kt/slot-writer/v1", &info);
+                    out.push(SlotTarget { group: *g, epoch: e, topic: topic_for(&key, &e), role: SlotRole::Forward, writer_seed: seed.0 });
+                }
+            }
         }
         for (p, topic, seed) in self.join_targets() {
             if !out.iter().any(|t| t.group == p.group) {
@@ -245,8 +257,23 @@ impl Replica {
             for e in chosen {
                 out.push(ReadTopic { group: *g, epoch: e, topic: topic_for(&state.keys[&e], &e) });
             }
+            // Doors (T10): members hear join requests there, a joiner hears its answer.
+            for (e, key) in self.read_doors(g) {
+                if !out.iter().any(|t| t.group == *g && t.epoch == e) {
+                    out.push(ReadTopic { group: *g, epoch: e, topic: topic_for(&key, &e) });
+                }
+            }
         }
         out
+    }
+
+    /// What a member writes under a door it answers at: every epoch record of the group (the joiner has nothing
+    /// else to check its Add against), and nothing more.
+    fn door_answer(&self, g: &GroupId) -> Result<Vec<Vec<u8>>> {
+        let state = &self.groups[g];
+        let mut recs: Vec<_> = state.epochs.all_records().collect();
+        recs.sort_by_key(|r| (r.body.created_ms, r.id()));
+        recs.into_iter().map(|r| r.encode()).collect()
     }
 
     /// Build the sealed contents of a slot. Deterministic in content (not in bytes: the
@@ -257,7 +284,7 @@ impl Replica {
             self.refresh_acks(&t.group, true)?;
         }
         let messages = self.slot_messages(t)?;
-        let key = self.groups[&t.group].keys.get(&t.epoch).cloned().ok_or_else(|| Error::NotFound("slot key".into()))?;
+        let key = self.slot_key(&t.group, &t.epoch).ok_or_else(|| Error::NotFound("slot key".into()))?;
         let payload = wire::encode(SLOT_TAG, SLOT_VERSION, &SlotPayload { group: t.group, epoch: t.epoch, messages })?;
         Ok(crypto::seal(&key, &slot_aad(&t.group, &t.epoch, &t.topic), &payload))
     }
@@ -314,6 +341,9 @@ impl Replica {
         let me_peer = self.identity.peer_id();
         if t.role == SlotRole::Join {
             return Ok(vec![b"join".to_vec(), t.epoch.0.to_vec()]);
+        }
+        if t.role == SlotRole::Forward && self.is_door(&t.group, &t.epoch) {
+            return self.door_answer(&t.group);
         }
         let state = self.groups.get(&t.group).ok_or_else(|| Error::NotFound("group".into()))?;
         let mut out: Vec<Vec<u8>> = self.carried_records(&t.group)?.into_iter().collect();
@@ -523,6 +553,9 @@ impl Replica {
             let p = self.pending_joins().into_iter().find(|p| p.group == t.group).ok_or_else(|| Error::NotFound("pending join".into()))?;
             return Ok(vec![Message::JoinRequest(self.join_request(&p)?).encode()?]);
         }
+        if t.role == SlotRole::Forward && self.is_door(&t.group, &t.epoch) {
+            return self.door_answer(&t.group)?.into_iter().map(|r| Message::Epoch(r).encode()).collect();
+        }
         let mut messages = Vec::new();
         for r in self.carried_records(&t.group)? {
             messages.push(Message::Epoch(r).encode()?);
@@ -607,12 +640,14 @@ impl Replica {
     /// closed by document epochs at removal cutoffs, D24). Untrusted input: each message is
     /// verified on its own, and one bad slot or message doesn't block the rest.
     pub fn open_slots(&mut self, t: &ReadTopic, blobs: &[&[u8]]) -> Result<SlotReport> {
-        let key = self
-            .groups
-            .get(&t.group)
-            .and_then(|s| s.keys.get(&t.epoch))
-            .cloned()
-            .ok_or_else(|| Error::NotFound("slot key".into()))?;
+        // A door can close between listing topics and opening them (the join it served just finished): nothing to
+        // open there any more.
+        let Some(key) = self.slot_key(&t.group, &t.epoch) else {
+            if self.groups.get(&t.group).is_some_and(|s| !s.keys.is_empty()) {
+                return Ok(SlotReport::default());
+            }
+            return Err(Error::NotFound("slot key".into()));
+        };
         let aad = slot_aad(&t.group, &t.epoch, &t.topic);
         let mut report = SlotReport::default();
         let mut epochs = Vec::new();

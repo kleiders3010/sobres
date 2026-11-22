@@ -289,8 +289,12 @@ impl Replica {
             self.accepted_groups.insert(g);
             let mut state = GroupState { epochs: GroupEpochs::new(g), keys: HashMap::new(), docs: BTreeMap::new(), new_records: Vec::new() };
             // The invite's epoch decides which genesis counts (S8), also across a restart.
-            let anchors: Vec<(EpochId, [u8; 32])> = std::fs::read(self.layout.group_dir(&g).join("invite_keys")).ok().and_then(|b| postcard::from_bytes(&b).ok()).unwrap_or_default();
+            let anchors = self.read_invite_keys(&g);
             for (e, _) in &anchors {
+                state.epochs.set_anchor(*e);
+            }
+            let join_anchors: Vec<EpochId> = std::fs::read(self.layout.group_dir(&g).join("join_anchors")).ok().and_then(|b| postcard::from_bytes(&b).ok()).unwrap_or_default();
+            for e in &join_anchors {
                 state.epochs.set_anchor(*e);
             }
             for rec in storage::read_records(&self.layout.control_log(&g))? {
@@ -300,8 +304,7 @@ impl Replica {
             }
             self.groups.insert(g, state);
             // Keys received through invites (before being added).
-            let invite_keys: Vec<(EpochId, [u8; 32])> = std::fs::read(self.layout.group_dir(&g).join("invite_keys")).ok().and_then(|b| postcard::from_bytes(&b).ok()).unwrap_or_default();
-            for (e, k) in invite_keys {
+            for (e, k) in anchors {
                 self.groups.get_mut(&g).expect("inserted").keys.entry(e).or_insert(SymKey(k));
             }
             self.refresh_keys(&g);
@@ -395,7 +398,29 @@ impl Replica {
         self.accepted_groups.insert(g);
     }
 
-    /// Make a key known out of band (the invite path, D55): lets a joiner read before being added.
+    /// A joiner's anchor without the group's key (records format 2, T10): the invite's epoch decides which
+    /// genesis counts (S8), also across a restart.
+    pub fn add_join_anchor(&mut self, g: GroupId, epoch: EpochId) {
+        self.accept_group(g);
+        let state = self.groups.entry(g).or_insert_with(|| GroupState {
+            epochs: GroupEpochs::new(g),
+            keys: HashMap::new(),
+            docs: BTreeMap::new(),
+            new_records: Vec::new(),
+        });
+        state.epochs.set_anchor(epoch);
+        let _ = std::fs::create_dir_all(self.layout.group_dir(&g));
+        let path = self.layout.group_dir(&g).join("join_anchors");
+        let mut all: Vec<EpochId> = std::fs::read(&path).ok().and_then(|b| postcard::from_bytes(&b).ok()).unwrap_or_default();
+        if !all.contains(&epoch) {
+            all.push(epoch);
+            if let Ok(b) = postcard::to_stdvec(&all) {
+                let _ = storage::write_atomic(&path, &b);
+            }
+        }
+    }
+
+    /// Make a key known out of band (format 1 invites from older apps, a backup's keys): readable at once.
     pub fn add_invite_key(&mut self, g: GroupId, epoch: EpochId, key: SymKey) {
         self.accept_group(g);
         let state = self.groups.entry(g).or_insert_with(|| GroupState {
@@ -408,14 +433,30 @@ impl Replica {
         state.epochs.set_anchor(epoch);
         // Kept with the group: the next process (app restart, background job) still reads.
         let _ = std::fs::create_dir_all(self.layout.group_dir(&g));
-        let path = self.layout.group_dir(&g).join("invite_keys");
-        let mut all: Vec<(EpochId, [u8; 32])> = std::fs::read(&path).ok().and_then(|b| postcard::from_bytes(&b).ok()).unwrap_or_default();
+        let mut all = self.read_invite_keys(&g);
         if !all.iter().any(|(e, _)| *e == epoch) {
             all.push((epoch, key.0));
             if let Ok(b) = postcard::to_stdvec(&all) {
-                let _ = storage::write_atomic(&path, &b);
+                let sealed = crypto::seal(&self.at_rest_key(), &g.0, &b);
+                let _ = storage::write_atomic(&self.layout.group_dir(&g).join("invite_keys"), &sealed);
             }
         }
+    }
+
+    /// The key that seals group keys this device keeps outside the epoch records (audit T15e): only this device's
+    /// own key gives it, so the file alone opens nothing.
+    fn at_rest_key(&self) -> SymKey {
+        crypto::derive(&self.identity.secret().to_bytes(), "kt/invite-keys-at-rest/v1", &[])
+    }
+
+    /// Keys that came through an older-format invite or a backup (sealed; files from older versions are plain and
+    /// still read, then sealed on the next write).
+    fn read_invite_keys(&self, g: &GroupId) -> Vec<(EpochId, [u8; 32])> {
+        let Ok(b) = std::fs::read(self.layout.group_dir(g).join("invite_keys")) else { return Vec::new() };
+        if let Some(v) = crypto::open(&self.at_rest_key(), &g.0, &b).ok().and_then(|p| postcard::from_bytes(&p).ok()) {
+            return v;
+        }
+        postcard::from_bytes(&b).unwrap_or_default()
     }
 
     pub fn create_group(&mut self) -> Result<GroupId> {

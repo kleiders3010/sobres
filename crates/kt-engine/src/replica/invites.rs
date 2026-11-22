@@ -10,8 +10,11 @@
 //!   *current* epoch key) with their lookup keys, for every transport to publish.
 //!
 //! Joiner side:
-//! - [`Replica::begin_join`] takes an opened record: the joiner can now read the group
-//!   (invite key) and posts a **signed join request** in a slot under the group's topic.
+//! - [`Replica::begin_join`] takes an opened record and posts a **signed join request** in a
+//!   slot under the invite's **door** (a key only the code gives: safety audit T10). The door
+//!   opens requests and answers only; the joiner reads the group once a member has let it in,
+//!   so everyone who reads it is a visible member. Format 1 records (older apps, a backup's own
+//!   rejoin) still carry the group's key and use the group's topic as before.
 //!   Link records are refused here (D6); [`Replica::begin_link`] is the linking path.
 //! - Any member that reads a valid request adds the device (a normal Add epoch, with
 //!   history keys). The joiner learns it through the forward slot and becomes a member.
@@ -205,7 +208,7 @@ impl Replica {
         let mut out = Vec::new();
         let gids: Vec<GroupId> = self.groups.keys().copied().collect();
         for g in gids {
-            let (head, key) = {
+            let (head, _key) = {
                 let state = &self.groups[&g];
                 let Some(head) = state.epochs.working_head() else { continue };
                 if !state.epochs.is_current_member(&me) {
@@ -230,7 +233,8 @@ impl Replica {
                     kind: inv.kind,
                     group: g,
                     epoch: head,
-                    epoch_key: key.0,
+                    epoch_key: None,
+                    door: Some(invite::door_key(&inv.code, &g)),
                     invite_id: inv.id(),
                     expires_ms: inv.expires_ms,
                     group_name,
@@ -238,6 +242,7 @@ impl Replica {
                     whereabouts: self.whereabouts.clone(),
                     published_ms: super::now_ms(),
                     hints: self.invite_hints(&g),
+                    point: self.group_point(&g, day),
                 };
                 out.push((lookup, invite::seal_record(&rec, &lookup, &rkey)?));
             }
@@ -272,7 +277,7 @@ impl Replica {
         let mut out = Vec::new();
         let gids: Vec<GroupId> = self.groups.keys().copied().collect();
         for g in gids {
-            let (head, key) = {
+            let (head, _key) = {
                 let state = &self.groups[&g];
                 let Some(head) = state.epochs.working_head() else { continue };
                 if !state.epochs.is_current_member(&me) {
@@ -296,7 +301,8 @@ impl Replica {
                         kind: inv.kind,
                         group: g,
                         epoch: head,
-                        epoch_key: key.0,
+                        epoch_key: None,
+                        door: Some(invite::door_key(&inv.code, &g)),
                         invite_id: inv.id(),
                         expires_ms: inv.expires_ms,
                         group_name,
@@ -304,6 +310,7 @@ impl Replica {
                         whereabouts: self.whereabouts.clone(),
                         published_ms: super::now_ms(),
                         hints: self.invite_hints(&g),
+                        point: self.group_point(&g, day),
                     };
                     out.push((g, inv.id(), day, lookup, invite::seal_record(&rec, &lookup, &rkey)?));
                 }
@@ -348,12 +355,28 @@ impl Replica {
         if super::now_ms() >= rec.expires_ms {
             return Err(Error::Rejected("this code has expired".into()));
         }
-        self.add_invite_key(rec.group, rec.epoch, crypto::SymKey(rec.epoch_key));
+        // Format 2 (T10): only the door; the request and the answer live under it, and the group is read once
+        // a member has let us in. Format 1 (an older app's record, or a backup's own rejoin): the key itself.
+        let epoch = match (rec.door, rec.epoch_key) {
+            (Some(door), _) => {
+                self.add_join_anchor(rec.group, rec.epoch);
+                crate::storage::write_atomic(&self.layout.group_dir(&rec.group).join("join_door"), &door)?;
+                if let Some(point) = rec.point {
+                    crate::storage::write_atomic(&self.layout.group_dir(&rec.group).join("join_point"), &point)?;
+                }
+                invite::door_epoch(&door)
+            }
+            (None, Some(k)) => {
+                self.add_invite_key(rec.group, rec.epoch, crypto::SymKey(k));
+                rec.epoch
+            }
+            (None, None) => return Err(Error::Invalid("this code's record is incomplete".into())),
+        };
         std::fs::create_dir_all(self.layout.group_dir(&rec.group))?;
         let p = PendingJoin {
             hints: rec.hints.clone(),
             group: rec.group,
-            epoch: rec.epoch,
+            epoch,
             invite_id: rec.invite_id,
             kind: rec.kind,
             group_name: rec.group_name.clone(),
@@ -384,6 +407,10 @@ impl Replica {
             self.pending_joins().into_iter().partition(|p| self.groups.get(&p.group).is_some_and(|s| s.epochs.is_current_member(&me)));
         if !done.is_empty() {
             let _ = self.save_pending(&waiting);
+            for p in &done {
+                let _ = std::fs::remove_file(self.layout.group_dir(&p.group).join("join_door"));
+                let _ = std::fs::remove_file(self.layout.group_dir(&p.group).join("join_point"));
+            }
         }
         done
     }
@@ -502,13 +529,59 @@ impl Replica {
         crate::storage::write_atomic(&self.answers_path(g), &postcard::to_stdvec(&v).map_err(|er| Error::Encoding(er.to_string()))?)
     }
 
-    /// Join-slot targets: for each pending join, a slot under the invite epoch's topic.
+    /// The door of our own pending join for `g`, if it came with one (records format 2).
+    fn own_door(&self, g: &GroupId) -> Option<[u8; 32]> {
+        if !self.pending_joins().iter().any(|p| p.group == *g) {
+            return None;
+        }
+        std::fs::read(self.layout.group_dir(g).join("join_door")).ok()?.try_into().ok()
+    }
+
+    /// The doors this device reads for `g` as (door epoch, door key): its own pending join's, and as a member
+    /// every open invite's plus every door it still answers under (T10: the joiner hears back there).
+    pub(super) fn read_doors(&self, g: &GroupId) -> Vec<(EpochId, crypto::SymKey)> {
+        let mut out = Vec::new();
+        if let Some(d) = self.own_door(g) {
+            out.push((invite::door_epoch(&d), crypto::SymKey(d)));
+        }
+        let me = self.identity.id();
+        if self.groups.get(g).is_some_and(|s| s.epochs.is_current_member(&me)) {
+            let now = super::now_ms();
+            let answering: Vec<EpochId> =
+                self.answer_epochs(g).into_iter().filter(|(_, t)| now.saturating_sub(*t) < super::FORWARD_WINDOW_MS).map(|(e, _)| e).collect();
+            for inv in self.invites(g) {
+                let d = invite::door_key(&inv.code, g);
+                let e = invite::door_epoch(&d);
+                if (answering.contains(&e) || self.invite_is_open(&inv)) && !out.iter().any(|(x, _)| *x == e) {
+                    out.push((e, crypto::SymKey(d)));
+                }
+            }
+        }
+        out
+    }
+
+    /// The key a slot under `epoch` is sealed with: the epoch's own, or a door's.
+    pub(super) fn slot_key(&self, g: &GroupId, epoch: &EpochId) -> Option<crypto::SymKey> {
+        if let Some(k) = self.groups.get(g).and_then(|s| s.keys.get(epoch)) {
+            return Some(k.clone());
+        }
+        self.read_doors(g).into_iter().find(|(e, _)| e == epoch).map(|(_, k)| k)
+    }
+
+    /// Whether `epoch` is one of `g`'s doors (not a real epoch).
+    pub(super) fn is_door(&self, g: &GroupId, epoch: &EpochId) -> bool {
+        !self.groups.get(g).is_some_and(|s| s.keys.contains_key(epoch)) && self.read_doors(g).iter().any(|(e, _)| e == epoch)
+    }
+
+    /// Join-slot targets: for each pending join, a slot under the invite epoch's topic (or its door's).
     pub(super) fn join_targets(&self) -> Vec<(PendingJoin, [u8; 32], [u8; 32])> {
         let mut out = Vec::new();
         for p in self.pending_joins() {
-            let Some(state) = self.groups.get(&p.group) else { continue };
-            let Some(key) = state.keys.get(&p.epoch) else { continue };
-            let topic = super::topic_for(key, &p.epoch);
+            if !self.groups.contains_key(&p.group) {
+                continue;
+            }
+            let Some(key) = self.slot_key(&p.group, &p.epoch) else { continue };
+            let topic = super::topic_for(&key, &p.epoch);
             let mut info = Vec::with_capacity(64);
             info.extend_from_slice(&p.group.0);
             info.extend_from_slice(&p.epoch.0);
