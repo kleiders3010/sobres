@@ -292,6 +292,13 @@ impl App {
         Ok(f(r.doc(&list.group, &list.doc).ok_or(Error::NotFound)?))
     }
 
+    /// Read a list's document with how its writers can be told (rebuilds re-write everything under one device).
+    pub fn read_authored<T>(&self, list: &ListInfo, f: impl FnOnce(&LoroDoc, &kt_engine::replica::Authors) -> T) -> Result<T> {
+        let r = self.lock();
+        let doc = r.doc(&list.group, &list.doc).ok_or(Error::NotFound)?;
+        Ok(f(doc, r.doc_authors(&list.group, &list.doc).ok_or(Error::NotFound)?))
+    }
+
     /// Run an edit on a list's document and commit it.
     pub fn edit<T>(&self, list: &ListInfo, f: impl FnOnce(&LoroDoc) -> Result<T>) -> Result<T> {
         let mut r = self.lock();

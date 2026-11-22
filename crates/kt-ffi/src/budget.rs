@@ -153,9 +153,9 @@ fn item(t: b::Tx, envs: &Names, accts: &Names) -> TxItem {
 /// `who` names the writing devices; a device it does not know (left the budget since) keeps the stored name.
 fn item_by(t: b::Tx, envs: &Names, accts: &Names, who: &Who) -> TxItem {
     let name = |m: &Names, k: &str| m.get(k).cloned().unwrap_or_default();
-    // The stored name: a document rebuild (after a removal) re-writes every entry under the rebuilding device, so
-    // the writing device can't name the author once the budget has been rebuilt (round 5, S5: partly fixed).
-    let by = t.by.clone();
+    // The person whose device entered it (kept across rebuilds, round 5, S5); the stored name only when that device
+    // isn't known here (it left the budget, or the budget was rebuilt before authors were kept).
+    let by = t.by_peer.and_then(|p| who.get(&p).cloned()).unwrap_or_else(|| t.by.clone());
     let edited_by = match (t.edit_peer, t.by_peer) {
         (Some(e), b) if Some(e) != b => who.get(&e).cloned().filter(|n| *n != by).unwrap_or_default(),
         _ => String::new(),
@@ -244,9 +244,9 @@ impl KtNode {
             .flat_map(|p| p.devices.iter().map(|d| (kt_engine::ids::peer_id_for(d), p.name.clone())).collect::<Vec<_>>())
             .collect();
         self.app
-            .read(&l, |d| {
+            .read_authored(&l, |d, authors| {
                 let (envs, accts) = (b::envelope_names(d), b::account_names(d));
-                b::transactions(d).into_iter().map(|t| item_by(t, &envs, &accts, &who)).collect()
+                b::transactions_by(d, authors).into_iter().map(|t| item_by(t, &envs, &accts, &who)).collect()
             })
             .map_err(fail)
     }

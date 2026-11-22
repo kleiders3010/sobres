@@ -1043,4 +1043,7 @@ impl kt_engine::replica::DocSemantics for TaskSemantics {
     fn rebase(&self, base: &LoroDoc, local: &LoroDoc, target: &LoroDoc) -> kt_engine::Result<()> {
         rebase(base, local, target).map_err(|e| kt_engine::Error::Invalid(e.to_string()))
     }
+    fn kept_authors(&self, before: &LoroDoc, prior: &kt_engine::replica::Authors) -> Vec<u8> {
+        budget::kept_authors(before, prior)
+    }
 }

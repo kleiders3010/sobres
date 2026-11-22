@@ -105,6 +105,51 @@ pub trait DocSemantics: Send + Sync {
     fn rebuild(&self, doc: &LoroDoc, peer: u64) -> Result<LoroDoc>;
     /// Re-apply the changes that turned `base` into `local` onto `target`, as new ops.
     fn rebase(&self, base: &LoroDoc, local: &LoroDoc, target: &LoroDoc) -> Result<()>;
+    /// Before a rebuild replaces `before`: who wrote each item, as the app wants to keep it
+    /// (a rebuild re-writes everything under the rebuilding device). `prior` is the table
+    /// kept at the switch that made `before` (None for the first generation, or unknown).
+    /// Every device computes it from its own copy, never from the proposer's word.
+    fn kept_authors(&self, _before: &LoroDoc, _prior: &Authors) -> Vec<u8> {
+        Vec::new()
+    }
+}
+
+/// How a document's writers can be told (D24 rebuilds re-write everything under one device).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Authors {
+    /// Never rebuilt: each change's device is its writer.
+    Direct,
+    /// Rebuilt; the table kept at the rebuild says who wrote what before it.
+    Kept(KeptAuthors),
+    /// Rebuilt, and who wrote what before it is not known on this device (rebuilt before
+    /// this was kept, or restored from a backup file).
+    Unknown,
+}
+
+impl Authors {
+    fn for_generation(generation: u32) -> Authors {
+        if generation == 0 { Authors::Direct } else { Authors::Unknown }
+    }
+}
+
+/// Who wrote what before the last document rebuild (see `DocSemantics::kept_authors`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeptAuthors {
+    /// The document peer whose rebuild started this generation.
+    pub rebuilder: u64,
+    /// The app's own table.
+    pub table: Vec<u8>,
+}
+
+impl KeptAuthors {
+    fn encode(&self) -> Vec<u8> {
+        let mut b = self.rebuilder.to_le_bytes().to_vec();
+        b.extend_from_slice(&self.table);
+        b
+    }
+    fn decode(b: &[u8]) -> Option<KeptAuthors> {
+        Some(KeptAuthors { rebuilder: u64::from_le_bytes(b.get(..8)?.try_into().ok()?), table: b[8..].to_vec() })
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -139,11 +184,15 @@ struct DocState {
     gen_base: i32,
     /// Set after switching generations: lets a better concurrent proposal replace ours.
     prev: Option<PrevGen>,
+    /// Who wrote what before this generation's rebuild.
+    authors: Authors,
 }
 
 struct PrevGen {
     /// The document before the switch.
     doc: LoroDoc,
+    /// The authors table that went with it.
+    authors: Authors,
     /// Who proposed the generation we switched to.
     proposer: DeviceId,
     /// The new document right after the switch (before our later edits).
@@ -152,7 +201,7 @@ struct PrevGen {
 
 fn new_doc_state(doc: LoroDoc, generation: u32) -> DocState {
     with_timestamps(&doc);
-    DocState { doc, sent_counter: 0, imported_since_snapshot: 0, generation, gen_base: 0, prev: None }
+    DocState { doc, sent_counter: 0, imported_since_snapshot: 0, generation, gen_base: 0, prev: None, authors: Authors::for_generation(generation) }
 }
 
 /// Changes record when they were made (per minute): "undo changes by a person since a
@@ -277,6 +326,11 @@ impl Replica {
                 let mut st = new_doc_state(doc, generation);
                 st.sent_counter = sent;
                 st.gen_base = gen_base;
+                if generation > 0 {
+                    if let Some(k) = std::fs::read(self.layout.doc_dir(&g, &d).join("authors")).ok().and_then(|b| KeptAuthors::decode(&b)) {
+                        st.authors = Authors::Kept(k);
+                    }
+                }
                 self.groups.get_mut(&g).expect("inserted").docs.insert(d, st);
                 // Re-apply logged envelopes (idempotent): restores pending changes too.
                 for env in storage::read_records(&self.layout.doc_updates(&g, &d))? {
@@ -394,6 +448,11 @@ impl Replica {
     /// Read access to a document (for the domain layer).
     pub fn doc(&self, g: &GroupId, d: &DocId) -> Option<&LoroDoc> {
         self.groups.get(g)?.docs.get(d).map(|s| &s.doc)
+    }
+
+    /// How the document's writers can be told (see `Authors`).
+    pub fn doc_authors(&self, g: &GroupId, d: &DocId) -> Option<&Authors> {
+        Some(&self.groups.get(g)?.docs.get(d)?.authors)
     }
 
     /// Counter of local commits in this session (compare to notice new local changes).
@@ -764,7 +823,7 @@ impl Replica {
             payload: postcard::to_stdvec(&proposal).map_err(|e| Error::Encoding(e.to_string()))?,
         };
         let env_bytes = Envelope::seal(&self.identity, head, &key, &inner)?.encode()?;
-        self.switch_generation(g, d, fresh, generation, self.identity.id(), None, &env_bytes)?;
+        self.switch_generation(g, d, fresh, generation, self.identity.id(), None, &env_bytes, (&source, me))?;
         let ds = self.groups.get_mut(g).expect("exists").docs.get_mut(d).expect("exists");
         ds.sent_counter = ds.doc.oplog_vv().get(&me).copied().unwrap_or(0);
         ds.gen_base = ds.sent_counter;
@@ -855,7 +914,7 @@ impl Replica {
             self.events.push(Event::Rejected { reason: "document epoch proposal doesn't match our state".into() });
             return Err(Error::Rejected("proposal state mismatch".into()));
         }
-        self.switch_generation(&g, &inner.doc, fresh, proposal.generation, sender, rebase, bytes)
+        self.switch_generation(&g, &inner.doc, fresh, proposal.generation, sender, rebase, bytes, (&base_doc, inner.peer))
     }
 
     /// Earlier generations of a document still kept (generation, when it was left, the
@@ -889,8 +948,22 @@ impl Replica {
         proposer: DeviceId,
         rebase: Option<(LoroDoc, LoroDoc)>,
         proposal_env: &[u8],
+        (before, rebuilder): (&LoroDoc, u64),
     ) -> Result<()> {
         let me = self.identity.peer_id();
+        // Who wrote what, from our own copy at the proposal's base (the snapshot only names the rebuilder).
+        let authors = {
+            let ds = self.groups.get(g).and_then(|s| s.docs.get(d)).ok_or_else(|| Error::NotFound("doc".into()))?;
+            // Replacing a concurrent proposal: the table that went with the pre-switch document.
+            let prior = match &ds.prev {
+                Some(p) if ds.generation == generation => &p.authors,
+                _ => &ds.authors,
+            };
+            match self.semantics.as_ref() {
+                Some(sem) => Authors::Kept(KeptAuthors { rebuilder, table: sem.kept_authors(before, prior) }),
+                None => Authors::Unknown,
+            }
+        };
         fresh.set_peer_id(me).map_err(|e| Error::Loro(e.to_string()))?;
         with_timestamps(&fresh);
         let start = fresh.fork();
@@ -958,12 +1031,19 @@ impl Replica {
             }
         }
         let ds = self.groups.get_mut(g).expect("checked").docs.get_mut(d).expect("checked");
-        let prev_doc = match ds.prev.take() {
+        let (prev_doc, prev_authors) = match ds.prev.take() {
             // Replacing a concurrent proposal: the pre-switch document stays the reference.
-            Some(p) if ds.generation == generation => p.doc,
-            _ => old,
+            Some(p) if ds.generation == generation => (p.doc, p.authors),
+            _ => (old, std::mem::replace(&mut ds.authors, Authors::Unknown)),
         };
-        ds.prev = Some(PrevGen { doc: prev_doc, proposer, start });
+        ds.prev = Some(PrevGen { doc: prev_doc, authors: prev_authors, proposer, start });
+        ds.authors = authors;
+        match &ds.authors {
+            Authors::Kept(a) => storage::write_atomic(&self.layout.doc_dir(g, d).join("authors"), &a.encode())?,
+            _ => {
+                let _ = std::fs::remove_file(self.layout.doc_dir(g, d).join("authors"));
+            }
+        }
         ds.generation = generation;
         ds.sent_counter = 0;
         ds.gen_base = 0;

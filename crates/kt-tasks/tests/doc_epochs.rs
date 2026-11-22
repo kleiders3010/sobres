@@ -162,6 +162,48 @@ fn removal_cutoff_makes_members_converge() {
     assert!(!tk::tasks(ds[1].doc(&g, &d).unwrap()).iter().any(|t| t.title == "late from C"));
 }
 
+/// pinned: after a rebuild every device still names who entered each entry, from its own copy, and keeps it
+/// after a restart (round 5, S5).
+#[test]
+fn rebuild_keeps_who_entered_entries() {
+    use tk::budget as b;
+    let root = std::env::temp_dir().join(format!("kt-de-auth-{}-{}", std::process::id(), rand::random::<u32>()));
+    let open = || {
+        let mut r = Replica::open(&root.join("identity"), &root.join("data"), sandbox()).unwrap();
+        r.set_semantics(Box::new(tk::TaskSemantics));
+        r
+    };
+    let (mut ds, g, d) = setup(2);
+    let mut third = open();
+    ds[0].add_member(&g, third.device_public()).unwrap();
+    third.accept_group(g);
+    for m in ds[0].export_group(&g).unwrap() {
+        let _ = third.receive(&m);
+    }
+    ds.push(third);
+    sync_all(&mut ds);
+    let doc = ds[1].doc(&g, &d).unwrap();
+    let bank = b::set_account(doc, None, "Bank", "bank", 10_000).unwrap();
+    let food = b::set_envelope(doc, None, "Food", 1000, "m", None, "").unwrap();
+    let input = b::TxInput { kind: "exp".into(), date: "2026-11-10".into(), amount: 250, account: bank, parts: vec![(food, 250)], ..Default::default() };
+    let t = b::set_tx(doc, None, &input, "Someone else", 7).unwrap();
+    ds[1].commit(&g, &d).unwrap();
+    sync_all(&mut ds);
+    let author = ds[1].identity().peer_id();
+    let who = |r: &Replica| b::transactions_by(r.doc(&g, &d).unwrap(), r.doc_authors(&g, &d).unwrap()).into_iter().find(|x| x.id == t).unwrap().by_peer;
+    assert!(ds.iter().all(|r| who(r) == Some(author)));
+    ds[0].propose_doc_epoch(&g, &d).unwrap();
+    sync_all(&mut ds);
+    assert!(ds.iter().all(|r| r.doc_generation(&g, &d) == ds[0].doc_generation(&g, &d)));
+    assert_ne!(b::transactions(ds[2].doc(&g, &d).unwrap())[0].by_peer, Some(author), "the rebuild re-wrote it");
+    for r in &ds {
+        assert_eq!(who(r), Some(author));
+    }
+    drop(ds.pop());
+    let again = open();
+    assert_eq!(who(&again), Some(author), "kept across a restart");
+}
+
 #[test]
 fn concurrent_proposals_converge() {
     let (mut ds, g, d) = setup(2);

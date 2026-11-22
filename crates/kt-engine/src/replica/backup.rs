@@ -198,6 +198,8 @@ impl Replica {
         std::fs::create_dir_all(self.layout.doc_dir(g, d))?;
         crate::storage::write_atomic(&self.layout.doc_snapshot(g, d), snapshot)?;
         crate::storage::write_atomic(&self.layout.doc_dir(g, d).join("generation"), &generation.to_le_bytes())?;
+        // Who wrote what before the file's last rebuild is not in it (the device's copy is gone).
+        let _ = std::fs::remove_file(self.layout.doc_dir(g, d).join("authors"));
         let state = self.groups.get_mut(g).ok_or_else(|| Error::NotFound("group".into()))?;
         state.docs.insert(*d, super::new_doc_state(doc, generation));
         Ok(())

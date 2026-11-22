@@ -18,7 +18,7 @@ only ever holds encrypted copies (for 14 days), and the app works without it.
   Finish marks them reconciled.
 - **Got money, Move, Transfer:** income into an account (and straight into envelopes if you like), money moved
   between envelopes, transfers between accounts (paying a card is one).
-- **Activity and Month:** every entry by day, searchable, with the name of who entered it (as their app gave it, a label rather than proof) and who edited it, in a shared budget; spending by
+- **Activity and Month:** every entry by day, searchable, with the name of who entered it and who edited it, in a shared budget, taken from the device that wrote it (when that device can't be told any more, for example it left the budget, the entry shows the name the writer's app gave); spending by
   envelope per month. CSV export.
 - **Shared:** invite with a link, QR code or 8 words. Two people can spend from the same envelope at the same time,
   offline, and nothing is lost or counted twice: balances are always added up from the entries, never stored.

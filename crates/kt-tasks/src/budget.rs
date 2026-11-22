@@ -29,6 +29,7 @@ use loro::{LoroDoc, LoroMap, LoroValue, ValueOrContainer};
 use rand::RngCore;
 
 use crate::{loro, Error, Result};
+pub use kt_engine::replica::Authors;
 
 pub const KINDS_ENV: [&str; 3] = ["m", "y", "g"];
 pub const KINDS_ACCT: [&str; 3] = ["bank", "cash", "card"];
@@ -208,6 +209,97 @@ fn readable(t: &Tx) -> bool {
 }
 
 fn read_tx(id: String, m: &LoroMap) -> Option<Tx> {
+    read_tx_by(id, m, &View::Direct)
+}
+
+/// How the writing devices of a budget's entries are told (round 5, S5): a document rebuild re-writes every entry
+/// under the rebuilding device, so after one the table kept at the rebuild names who entered and last changed each.
+enum View {
+    Direct,
+    Kept { rebuilder: u64, table: BTreeMap<String, Kept> },
+    Unknown,
+}
+
+/// One entry as it stood right before a rebuild. 0 = not known.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Kept {
+    author: u64,
+    editor: u64,
+    at: u64,
+    /// [`values_hash`] then: equal now means nobody has changed the entry since the rebuild.
+    hash: u64,
+}
+
+impl View {
+    fn of(a: &Authors) -> View {
+        match a {
+            Authors::Direct => View::Direct,
+            Authors::Unknown => View::Unknown,
+            Authors::Kept(k) => match decode_kept(&k.table) {
+                Some(table) => View::Kept { rebuilder: k.rebuilder, table },
+                None => View::Unknown,
+            },
+        }
+    }
+}
+
+fn decode_kept(mut b: &[u8]) -> Option<BTreeMap<String, Kept>> {
+    let mut out = BTreeMap::new();
+    let u64_at =|b: &mut &[u8]| -> Option<u64> {
+        let (x, rest) = b.split_at_checked(8)?;
+        *b = rest;
+        Some(u64::from_le_bytes(x.try_into().ok()?))
+    };
+    while !b.is_empty() {
+        let (n, rest) = b.split_at_checked(2)?;
+        let n = u16::from_le_bytes(n.try_into().ok()?) as usize;
+        let (id, rest) = rest.split_at_checked(n)?;
+        let id = std::str::from_utf8(id).ok()?.to_string();
+        b = rest;
+        let k = Kept { author: u64_at(&mut b)?, editor: u64_at(&mut b)?, at: u64_at(&mut b)?, hash: u64_at(&mut b)? };
+        out.insert(id, k);
+    }
+    Some(out)
+}
+
+/// FNV-1a over everything an edit can change (stable across builds: the table is kept on disk).
+fn values_hash(t: &Tx) -> u64 {
+    fn eat(h: &mut u64, b: &[u8]) {
+        for x in b.iter().chain(std::iter::once(&0xffu8)) {
+            *h ^= *x as u64;
+            *h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    for f in [&t.kind, &t.date, &t.account, &t.to, &t.payee, &t.note] {
+        eat(&mut h, f.as_bytes());
+    }
+    eat(&mut h, &t.amount.to_le_bytes());
+    eat(&mut h, &t.status.to_le_bytes());
+    for (e, c) in &t.parts {
+        eat(&mut h, e.as_bytes());
+        eat(&mut h, &c.to_le_bytes());
+    }
+    h
+}
+
+/// The table [`View::Kept`] reads, from the document right before a rebuild (`prior`: how its writers were told).
+pub fn kept_authors(before: &LoroDoc, prior: &Authors) -> Vec<u8> {
+    let view = View::of(prior);
+    let mut out = Vec::new();
+    for (id, m) in entries(before, "tx") {
+        let Some(t) = read_tx_by(id, &m, &view) else { continue };
+        let Ok(n) = u16::try_from(t.id.len()) else { continue };
+        out.extend_from_slice(&n.to_le_bytes());
+        out.extend_from_slice(t.id.as_bytes());
+        for x in [t.by_peer.unwrap_or(0), t.edit_peer.unwrap_or(0), t.at, values_hash(&t)] {
+            out.extend_from_slice(&x.to_le_bytes());
+        }
+    }
+    out
+}
+
+fn read_tx_by(id: String, m: &LoroMap, view: &View) -> Option<Tx> {
     let kind = s(m, "k");
     if !KINDS_TX.contains(&kind.as_str()) {
         return None; // a newer version's kind: kept in the document, not counted
@@ -229,7 +321,7 @@ fn read_tx(id: String, m: &LoroMap) -> Option<Tx> {
     let by_peer = m.get_last_editor("at");
     let editors: Vec<u64> = ["d", "amt", "k", "acct", "to", "payee", "note", "p", "clr"].iter().filter_map(|k| m.get_last_editor(k)).collect();
     let edit_peer = editors.iter().copied().find(|p| Some(*p) != by_peer).or(by_peer);
-    Some(Tx {
+    let mut t = Tx {
         id,
         kind,
         date: s(m, "d"),
@@ -247,11 +339,38 @@ fn read_tx(id: String, m: &LoroMap) -> Option<Tx> {
         status: i(m, "clr").clamp(NOT_CLEARED, RECONCILED),
         by_peer,
         edit_peer,
-    })
+    };
+    let nz = |p: u64| (p != 0).then_some(p);
+    match view {
+        View::Direct => {}
+        // Rebuilt and nothing kept: the device that wrote "at" may be the rebuilder, so nobody is named as the
+        // author (the stored label shows); a change by another device still shows.
+        View::Unknown => {
+            t.by_peer = None;
+            t.edit_peer = editors.iter().copied().find(|p| Some(*p) != by_peer);
+        }
+        View::Kept { rebuilder, table } => {
+            let r = *rebuilder;
+            // An entry the rebuilder entered after the rebuild has no row: it is the rebuilder's own.
+            if let Some(k) = table.get(&t.id).filter(|k| by_peer == Some(r) && k.at == t.at) {
+                t.by_peer = nz(k.author);
+                let other = editors.iter().copied().find(|p| *p != r && Some(*p) != t.by_peer);
+                let rebuilder_changed = values_hash(&t) != k.hash && editors.iter().all(|p| *p == r);
+                t.edit_peer = other.or(if rebuilder_changed { Some(r) } else { nz(k.editor) }).or(t.by_peer);
+            }
+        }
+    }
+    Some(t)
 }
 
 pub fn transactions(doc: &LoroDoc) -> Vec<Tx> {
-    let mut out: Vec<Tx> = entries(doc, "tx").into_iter().filter_map(|(id, m)| read_tx(id, &m)).filter(readable).collect();
+    transactions_by(doc, &Authors::Direct)
+}
+
+/// The entries, naming their writers as `authors` allows (from `Replica::doc_authors`).
+pub fn transactions_by(doc: &LoroDoc, authors: &Authors) -> Vec<Tx> {
+    let view = View::of(authors);
+    let mut out: Vec<Tx> = entries(doc, "tx").into_iter().filter_map(|(id, m)| read_tx_by(id, &m, &view)).filter(readable).collect();
     // Newest first: by date, then by when entered, then id (stable on every device).
     out.sort_by(|a, b| (&b.date, b.at, &b.id).cmp(&(&a.date, a.at, &a.id)));
     out
@@ -1174,6 +1293,56 @@ mod tests {
         // A rebuild re-writes everything under its own peer: entries are equal apart from who wrote them last.
         let anon = |v: Vec<Tx>| v.into_iter().map(|t| Tx { by_peer: None, edit_peer: None, ..t }).collect::<Vec<_>>();
         assert_eq!(anon(transactions(&fresh)), anon(transactions(&d)));
+    }
+
+    /// pinned: who entered and who last changed an entry survive document rebuilds, from each device's own copy
+    /// (round 5, S5); not known = nobody named (the stored label shows).
+    #[test]
+    fn authors_survive_rebuilds() {
+        use kt_engine::replica::KeptAuthors;
+        let (ana, ben, cy, r1, r2) = (11u64, 22u64, 33u64, 99u64, 77u64);
+        let d = doc();
+        d.set_peer_id(ana).unwrap();
+        let bank = set_account(&d, None, "Bank", "bank", 10_000).unwrap();
+        let food = set_envelope(&d, None, "Food", 1000, "m", None, "").unwrap();
+        let a = set_tx(&d, None, &exp(&bank, &food, 250), "Ana", 7).unwrap();
+        d.set_peer_id(ben).unwrap();
+        let b = set_tx(&d, None, &exp(&bank, &food, 100), "Ana", 8).unwrap(); // Ben's device, claiming Ana's name
+        set_tx(&d, Some(&a), &exp(&bank, &food, 300), "", 9).unwrap();
+        let peers = |v: Vec<Tx>, id: &str| v.into_iter().find(|t| t.id == id).map(|t| (t.by_peer, t.edit_peer)).unwrap();
+        assert_eq!(peers(transactions(&d), &a), (Some(ana), Some(ben)));
+        assert_eq!(peers(transactions(&d), &b), (Some(ben), Some(ben)));
+
+        // First rebuild, by r1.
+        let kept1 = Authors::Kept(KeptAuthors { rebuilder: r1, table: kept_authors(&d, &Authors::Direct) });
+        let g1 = crate::rebuild(&d, r1).unwrap();
+        assert_eq!(peers(transactions(&g1), &a), (Some(r1), Some(r1)), "a rebuild alone names the rebuilder");
+        assert_eq!(peers(transactions_by(&g1, &kept1), &a), (Some(ana), Some(ben)));
+        assert_eq!(peers(transactions_by(&g1, &kept1), &b), (Some(ben), Some(ben)));
+        assert_eq!(peers(transactions_by(&g1, &Authors::Unknown), &a).0, None);
+        // After it: Cy changes Ana's entry, the rebuilder enters one of its own and clears Ben's.
+        g1.set_peer_id(cy).unwrap();
+        set_tx(&g1, Some(&a), &TxInput { note: "lunch".into(), ..exp(&bank, &food, 300) }, "", 10).unwrap();
+        g1.set_peer_id(r1).unwrap();
+        let c = set_tx(&g1, None, &exp(&bank, &food, 50), "R", 11).unwrap();
+        set_cleared(&g1, &b, true).unwrap();
+        assert_eq!(peers(transactions_by(&g1, &kept1), &a), (Some(ana), Some(cy)));
+        assert_eq!(peers(transactions_by(&g1, &kept1), &c), (Some(r1), Some(r1)));
+        assert_eq!(peers(transactions_by(&g1, &kept1), &b), (Some(ben), Some(r1)), "the rebuilder's own change shows");
+
+        // Second rebuild, by r2, on top of the first table.
+        let kept2 = Authors::Kept(KeptAuthors { rebuilder: r2, table: kept_authors(&g1, &kept1) });
+        let g2 = crate::rebuild(&g1, r2).unwrap();
+        let v = transactions_by(&g2, &kept2);
+        assert_eq!(peers(v.clone(), &a), (Some(ana), Some(cy)));
+        assert_eq!(peers(v.clone(), &b), (Some(ben), Some(r1)));
+        assert_eq!(peers(v, &c), (Some(r1), Some(r1)));
+        // A table kept on an unknown generation names nobody for what was there.
+        let lost = Authors::Kept(KeptAuthors { rebuilder: r2, table: kept_authors(&g1, &Authors::Unknown) });
+        assert_eq!(peers(transactions_by(&g2, &lost), &a).0, None);
+        // A broken table reads as unknown, never as the rebuilder.
+        let bad = Authors::Kept(KeptAuthors { rebuilder: r2, table: vec![5, 0, 1] });
+        assert_eq!(peers(transactions_by(&g2, &bad), &a).0, None);
     }
 
     #[test]
