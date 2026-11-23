@@ -51,8 +51,8 @@ async fn which_blossom_servers_take_our_blobs() {
             let mut read = "-";
             if (200..300).contains(&status) {
                 read = match client.get(format!("{server}/{sha}")).send().await {
-                    Ok(r) if r.status().is_success() => match r.bytes().await {
-                        Ok(b) if Sha256::digest(&b).as_slice() == Sha256::digest(&data).as_slice() => "read back",
+                    Ok(r) if r.status().is_success() => match kt_net::http::bytes_capped(r, data.len() + 1024).await {
+                        Some(b) if Sha256::digest(&b).as_slice() == Sha256::digest(&data).as_slice() => "read back",
                         _ => "read WRONG",
                     },
                     Ok(r) if r.status().as_u16() == 404 => "not found",

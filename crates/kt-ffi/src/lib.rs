@@ -101,10 +101,13 @@ pub struct ChangeItem {
     pub list_id: String,
     pub list_name: String,
     pub who: String,
-    /// "added", "completed" or "joined".
+    /// "added", "completed", "entered" (budget money, see `cents`) or "joined".
     pub kind: String,
     pub title: String,
     pub at_ms: u64,
+    /// "entered": the amount in cents (income negative) and the budget's currency symbol.
+    pub cents: i64,
+    pub currency: String,
 }
 
 /// The settings screen (DESIGN settings table). A setting that doesn't exist on this
@@ -525,6 +528,27 @@ pub struct GroupStorage {
     pub bytes: u64,
 }
 
+/// A device that joined one of our shared lists recently ([`KtNode::recent_joins`]).
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct RecentJoinItem {
+    pub group_id: String,
+    pub device_id: String,
+    /// The name it gave itself (may be empty) and who let it in.
+    pub name: String,
+    pub by: String,
+    pub list_name: String,
+    pub joined_ms: u64,
+}
+
+/// A shared group's sync state for the list header ([`KtNode::group_sync`]).
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct GroupSync {
+    /// This device's newest changes reached no shared mailbox in the last round.
+    pub only_here: bool,
+    /// When another current member last wrote (ms), if any has.
+    pub others_last_ms: Option<u64>,
+}
+
 /// One sync round, for the sync log.
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct RoundLog {
@@ -789,6 +813,11 @@ struct Who<'a> {
     my_devices: &'a [String],
     people: &'a [(Vec<String>, PersonItem)],
 }
+
+/// Reminder caps (second-pass audit T2-3): Android refuses more than 500 alarms per app.
+pub const REMINDERS_PER_LIST: usize = 100;
+pub const REMINDERS_MAX: usize = 400;
+const REMINDER_TITLE_MAX: usize = 200;
 
 fn flatten(ts: &[kt_tasks::TaskView], who: &Who, parent: Option<&str>, depth: u32, out: &mut Vec<TaskItem>) {
     let me = who.me;
@@ -1067,7 +1096,7 @@ impl KtNode {
     pub fn open_restoring(identity_dir: String, data_dir: String, worker_path: String, options: NodeOptions, backup: Vec<u8>, password: Option<String>) -> Result<Arc<KtNode>, KtError> {
         match kt_engine::replica::backup::open_with(&backup, password.as_deref()) {
             Err(_) if kt_engine::replica::backup::needs_password(&backup) => return Err(fail(kt_engine::replica::backup::WRONG_PASSWORD)),
-            Err(_) => return Err(fail("not a Tasks backup file")),
+            Err(_) => return Err(fail("This isn't a Sobres backup file.")),
             Ok(_) => {}
         }
         KtNode::start(identity_dir, data_dir, worker_path, options, Some(backup), password, true)
@@ -1439,13 +1468,15 @@ impl KtNode {
         Ok(())
     }
 
-    /// Reminders of open tasks from an hour ago on, across all lists, soonest first.
+    /// Reminders of open tasks from an hour ago on, across all lists, soonest first: at most
+    /// [`REMINDERS_PER_LIST`] from one list and [`REMINDERS_MAX`] in all (the soonest ones).
     pub fn upcoming_reminders(&self) -> Vec<ReminderItem> {
         fn walk(ts: &[kt_tasks::TaskView], l: &ListInfo, from: u64, out: &mut Vec<ReminderItem>) {
             for t in ts {
                 if let (Some(at), false) = (t.remind_ms, t.done) {
                     if at >= from {
-                        out.push(ReminderItem { list_id: l.doc.to_hex(), list_name: l.name.clone(), task_id: t.id.clone(), title: t.title.clone(), at_ms: at });
+                        let title: String = t.title.chars().take(REMINDER_TITLE_MAX).collect();
+                        out.push(ReminderItem { list_id: l.doc.to_hex(), list_name: l.name.clone(), task_id: t.id.clone(), title, at_ms: at });
                     }
                 }
                 walk(&t.children, l, from, out);
@@ -1455,10 +1486,16 @@ impl KtNode {
         let mut out = Vec::new();
         for l in self.app.lists() {
             if let Ok(ts) = self.app.read(&l, kt_tasks::tasks) {
-                walk(&ts, &l, from, &mut out);
+                let mut mine = Vec::new();
+                walk(&ts, &l, from, &mut mine);
+                // T2-3: one list (anyone in it can write) can't use up the phone's alarms (Android: 500 per app).
+                mine.sort_by_key(|r| r.at_ms);
+                mine.truncate(REMINDERS_PER_LIST);
+                out.extend(mine);
             }
         }
         out.sort_by_key(|r| r.at_ms);
+        out.truncate(REMINDERS_MAX);
         out
     }
 
@@ -1554,6 +1591,14 @@ impl KtNode {
         self.app.edit(&l, |d| kt_tasks::delete_task(d, &task_id)).map_err(fail)
     }
 
+    /// How a shared group stands (cold UX review U-T4): whether this device's newest changes are still only
+    /// here, and when another member last wrote.
+    pub fn group_sync(&self, group_id: String) -> Result<GroupSync, KtError> {
+        let g = gid(&group_id)?;
+        let others_last_ms = self.app.with(|r| r.others_last_status_ms(&g));
+        Ok(GroupSync { only_here: self.net.syncer.is_waiting(&g), others_last_ms })
+    }
+
     /// Create an invite to a group (8 words, valid `days`, 1–30).
     pub fn invite(self: Arc<Self>, group_id: String, days: u32) -> Result<InviteInfo, KtError> {
         let g = gid(&group_id)?;
@@ -1597,7 +1642,7 @@ impl KtNode {
     pub fn join_code(&self, words: String) -> Result<JoinResult, KtError> {
         let shared = kt_net::invite_net::parse_shared(&words).map_err(fail)?;
         if shared.kind == Some(CodeKind::Link) {
-            return Err(fail("this is a device link, not an invite: use it to link this device to your account"));
+            return Err(fail("This is a device link code, not an invite. Open ☰ › Link to my other device."));
         }
         let code = shared.code;
         let direct: Vec<_> = shared.direct.into_iter().collect();
@@ -1606,7 +1651,7 @@ impl KtNode {
             let found = kt_net::invite_net::fetch(&layers, &code, CodeKind::Invite, &direct, Duration::from_millis(0)).await;
             let Some((rec, _)) = found else {
                 if kt_net::invite_net::fetch(&layers, &code, CodeKind::Link, &[], Duration::from_millis(0)).await.is_some() {
-                    return Err(fail("this is a device link code, not an invite: use it to link this device to your account"));
+                    return Err(fail("This is a device link code, not an invite. Open ☰ › Link to my other device."));
                 }
                 // Not out there yet, or no connection right now: keep looking.
                 self.add_pending_lookup(&words);
@@ -1635,11 +1680,14 @@ impl KtNode {
                 kind: match c.kind {
                     kt_tasks::app::ChangeKind::Added => "added",
                     kt_tasks::app::ChangeKind::Completed => "completed",
+                    kt_tasks::app::ChangeKind::Entered => "entered",
                     kt_tasks::app::ChangeKind::Joined => "joined",
                 }
                 .into(),
                 title: c.title,
                 at_ms: c.at_ms,
+                cents: c.cents,
+                currency: c.currency,
             })
             .collect()
     }
@@ -1816,7 +1864,7 @@ impl KtNode {
     pub fn link_preview(&self, words: String) -> Result<LinkPreview, KtError> {
         let shared = kt_net::invite_net::parse_shared(&words).map_err(fail)?;
         if shared.kind == Some(CodeKind::Invite) {
-            return Err(fail("this is an invite, not a device link: use \"Join with code\""));
+            return Err(fail("This is an invite to a budget, not a device link. Open ☰ › Join a shared budget."));
         }
         let code = shared.code;
         let direct: Vec<_> = shared.direct.into_iter().collect();
@@ -1825,7 +1873,7 @@ impl KtNode {
             match kt_net::invite_net::fetch(&layers, &code, CodeKind::Link, &direct, Duration::from_millis(0)).await {
                 Some((rec, _)) => Ok(rec),
                 None if kt_net::invite_net::fetch(&layers, &code, CodeKind::Invite, &[], Duration::from_millis(0)).await.is_some() => {
-                    Err(fail("this is an invite, not a device link code: use \"Join with code\""))
+                    Err(fail("This is an invite to a budget, not a device link. Open ☰ › Join a shared budget."))
                 }
                 None => Err(fail("no link code found for these words: check them, or it may have expired")),
             }
@@ -1861,6 +1909,38 @@ impl KtNode {
     /// This account's devices.
     pub fn devices(&self) -> Vec<DeviceItem> {
         self.app.devices().into_iter().map(|d| DeviceItem { id: d.device.to_hex(), name: d.name, this_device: d.this_device }).collect()
+    }
+
+    /// Devices let into our shared lists recently (second-pass audit T2-13): shown with Remove and OK.
+    pub fn recent_joins(&self) -> Vec<RecentJoinItem> {
+        let lists = self.app.lists();
+        self.app
+            .recent_joins()
+            .into_iter()
+            .map(|j| RecentJoinItem {
+                group_id: j.group.to_hex(),
+                device_id: j.device.to_hex(),
+                name: j.name,
+                by: j.by,
+                list_name: lists.iter().find(|l| l.group == j.group).map(|l| l.name.clone()).unwrap_or_default(),
+                joined_ms: j.joined_ms,
+            })
+            .collect()
+    }
+
+    pub fn dismiss_join(&self, group_id: String, device_id: String) -> Result<(), KtError> {
+        let d = kt_engine::DeviceId::from_hex(&device_id).ok_or_else(|| fail("bad device id"))?;
+        self.app.dismiss_join(&gid(&group_id)?, &d).map_err(fail)?;
+        self.notify();
+        Ok(())
+    }
+
+    /// Remove a device that joined (it leaves that list; keys rotate).
+    pub fn remove_joined(&self, group_id: String, device_id: String) -> Result<(), KtError> {
+        let d = kt_engine::DeviceId::from_hex(&device_id).ok_or_else(|| fail("bad device id"))?;
+        self.app.remove_joined(&gid(&group_id)?, &d).map_err(fail)?;
+        self.notify();
+        Ok(())
     }
 
     /// Devices linked in the last day ("New device linked · Undo" on every device).

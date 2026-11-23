@@ -20,10 +20,15 @@ use crate::Result;
 /// Changes older than this aren't worth a notification anymore.
 pub const STALE_MS: u64 = 3 * 86_400_000;
 
+/// In [`Seen`]'s per-list map: budget entries are "tx:<id>", and "tx:" alone says they were recorded.
+const TX_MARK: &str = "tx:";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChangeKind {
     Added,
     Completed,
+    /// Someone entered money in a budget (U-S2): `title` is the payee, [`Change::cents`] the amount (negative = income).
+    Entered,
     /// Someone joined the group (`list` is empty, `title` too).
     Joined,
 }
@@ -41,6 +46,9 @@ pub struct Change {
     pub title: String,
     /// When they made it (their device's clock).
     pub at_ms: u64,
+    /// [`ChangeKind::Entered`]: the amount in cents (income negative) and the budget's currency symbol.
+    pub cents: i64,
+    pub currency: String,
 }
 
 /// What this device last showed or notified.
@@ -58,9 +66,14 @@ const NAME_WAIT_MS: u64 = 86_400_000;
 
 pub(super) fn people(r: &kt_engine::replica::Replica, g: &GroupId) -> HashMap<String, String> {
     let Some(d) = group_doc(r, g).and_then(|gd| r.doc(g, &gd)) else { return HashMap::new() };
-    match d.get_map("people").get_deep_value() {
+    let people = d.get_map("people");
+    // Second-pass Sobres audit S3-4 (b): a name counts only when that device wrote it itself (each change is signed
+    // by its device, so the last writer of an entry can't be faked); another member's app can't rename anyone.
+    let own = |k: &str| kt_engine::ids::DeviceId::from_hex(k).is_some_and(|dev| people.get_last_editor(k) == Some(peer_id_for(&dev)));
+    match people.get_deep_value() {
         LoroValue::Map(m) => m
             .iter()
+            .filter(|(k, _)| own(k))
             .filter_map(|(k, v)| if let LoroValue::String(s) = v { Some((k.clone(), crate::clean_name(s))) } else { None })
             .filter(|(_, s)| !s.is_empty())
             .collect(),
@@ -96,7 +109,14 @@ impl App {
                 continue;
             }
             let Some(gd) = group_doc(&r, &g) else { continue };
-            r.doc(&g, &gd).unwrap().get_map("people").insert(&me.to_hex(), name.as_str()).map_err(eng)?;
+            let people = r.doc(&g, &gd).unwrap().get_map("people");
+            // After another member compacted the group, it is the last writer of every entry and ours no longer counts
+            // (S3-4). Writing the same text again is no change at all in Loro, so the name never came back: the entry
+            // is removed and written again, which makes this device its writer.
+            if people.get(&me.to_hex()).is_some() {
+                people.delete(&me.to_hex()).map_err(eng)?;
+            }
+            people.insert(&me.to_hex(), name.as_str()).map_err(eng)?;
             r.commit(&g, &gd).map_err(eng)?;
         }
         Ok(())
@@ -145,7 +165,7 @@ impl App {
                 now_seen.insert(hex);
                 if now.saturating_sub(at) <= STALE_MS {
                     let group_name = group_names.get(&g).cloned().unwrap_or_default();
-                    out.push(Change { group: g, group_name, list: None, who, kind: ChangeKind::Joined, title: String::new(), at_ms: at });
+                    out.push(Change { group: g, group_name, list: None, who, kind: ChangeKind::Joined, title: String::new(), at_ms: at, cents: 0, currency: String::new() });
                 }
             }
             seen.groups.insert(g.to_hex(), now_seen);
@@ -174,10 +194,31 @@ impl App {
                     if ours.contains(&by) || now.saturating_sub(at) > STALE_MS {
                         continue;
                     }
-                    out.push(Change { group: list.group, group_name: list.group_name.clone(), list: Some(list.clone()), who: who(by), kind, title: t.title.clone(), at_ms: at });
+                    out.push(Change { group: list.group, group_name: list.group_name.clone(), list: Some(list.clone()), who: who(by), kind, title: t.title.clone(), at_ms: at, cents: 0, currency: String::new() });
                 }
             }
-            seen.lists.insert(list.doc.to_hex(), tasks.into_iter().map(|t| (t.id, t.done)).collect());
+            let mut ids: BTreeMap<String, bool> = tasks.into_iter().map(|t| (t.id, t.done)).collect();
+            // Budget entries (U-S2): a new expense or income by someone else. Entries are kept as "tx:<id>"; the
+            // "tx:" marker says they were recorded, so the first run after an update doesn't report old entries.
+            let txs = r.doc_authors(&list.group, &list.doc).map(|a| crate::budget::transactions_by(doc, a)).unwrap_or_default();
+            if let Some(known) = known.filter(|k| k.contains_key(TX_MARK)) {
+                let names = people(&r, &list.group);
+                let mut currency = None;
+                for t in txs.iter().filter(|t| t.kind == "exp" || t.kind == "inc") {
+                    let Some(by) = t.by_peer else { continue };
+                    if known.contains_key(&format!("{TX_MARK}{}", t.id)) || ours.contains(&by) || now.saturating_sub(t.at) > STALE_MS {
+                        continue;
+                    }
+                    let who = r.members(&list.group).into_iter().find(|d| peer_id_for(d) == by).and_then(|d| names.get(&d.to_hex()).cloned()).unwrap_or_else(|| "Someone".into());
+                    let cents = if t.kind == "inc" { -t.amount } else { t.amount };
+                    let currency = currency.get_or_insert_with(|| crate::budget::currency_of(doc)).clone();
+                    let title = if t.payee.is_empty() { t.note.clone() } else { t.payee.clone() };
+                    out.push(Change { group: list.group, group_name: list.group_name.clone(), list: Some(list.clone()), who, kind: ChangeKind::Entered, title, at_ms: t.at, cents, currency });
+                }
+            }
+            ids.insert(TX_MARK.into(), false);
+            ids.extend(txs.into_iter().map(|t| (format!("{TX_MARK}{}", t.id), false)));
+            seen.lists.insert(list.doc.to_hex(), ids);
         }
         drop(r);
         storage::write_atomic(&self.seen_path(), &wire::encode(*b"SN", 2, &seen).map_err(eng)?).map_err(eng)?;

@@ -24,6 +24,32 @@ fun tr(en: String, vararg args: Pair<String, Any?>): String {
     return s
 }
 
+/**
+ * What an error says to the person: the engine's own words only when they are a known, worded message (a key of
+ * [ES]), else [fallback], which says what to do next. Raw engine text never reaches the screen (cold UX review U-T10).
+ */
+fun userError(e: Throwable?, fallback: String): String {
+    // The engine's own text (the generated exception's `message` is "msg=…", which matched no key before).
+    val m = ((e as? com.jurisgames.sobres.core.KtException.Failed)?.msg ?: e?.message)?.trim()
+    // U-S10: an engine message is never shown as is (English showed the raw text); it names the real menu item.
+    CORE_WORDS[m]?.let { return tr(it) }
+    // U-C8 (Ciclo review, general): nothing else the engine says is shown; the fallback says what to do next.
+    // Not kept for Diagnostics: its export promises no user content, and a raw error may quote some.
+    return fallback
+}
+
+/** The engine's messages that reach people, in the app's own words (the keys are the engine's text). */
+val CORE_WORDS: Map<String?, String> = mapOf(
+    "not a backup file" to "This isn't a Sobres backup file.",
+    "wrong backup password" to "Wrong backup password.",
+    "password too short" to "The password is too short.",
+    "no link code found for these words: check them, or it may have expired" to "No link code has these words. Check them; a code also stops working after a while.",
+    "This is a device link code, not an invite. Open ☰ › Link to my other device." to "This is a device link code, not an invite. Open ☰ › Link to my other device.",
+    "This is an invite to a budget, not a device link. Open ☰ › Join a shared budget." to "This is an invite to a budget, not a device link. Open ☰ › Join a shared budget.",
+    "This isn't a Sobres backup file." to "This isn't a Sobres backup file.",
+    "not a Tasks backup file" to "This isn't a Sobres backup file.",
+)
+
 /** Day and month names without the trailing dot some languages put on short forms ("vie." -> "vie"). */
 fun shortName(s: String): String = s.replace(".", "")
 
@@ -35,6 +61,103 @@ fun trSummary(s: String): String = if (!Lang.spanish) s else s
     .replace("a device", "un dispositivo")
 
 val ES: Map<String, String> = mapOf(
+    "1 entry could not be read (made by a different app) and counts nowhere" to "1 movimiento no se pudo leer (lo hizo otra app) y no cuenta en ningún lado",
+    "1 entry" to "1 movimiento",
+    "Open Sobres to see it" to "Abrí Sobres para verlo",
+    "Wrong backup password." to "La contraseña de la copia no es correcta.",
+    "The password is too short." to "La contraseña es muy corta.",
+    "No link code has these words. Check them; a code also stops working after a while." to "Ningún código de vínculo tiene esas palabras. Revisalas; un código también deja de funcionar después de un tiempo.",
+    "{who} joined {list}, let in by {by}'s invite" to "{who} se unió a {list}, con la invitación de {by}",
+    "{who} joined {list}" to "{who} se unió a {list}",
+    "A new device" to "Un dispositivo nuevo",
+    "Save a backup file" to "Guardar un archivo de copia",
+    "Export for a spreadsheet (CSV)" to "Exportar para una planilla (CSV)",
+    "Backup saved" to "Copia guardada",
+    "Couldn't save the backup" to "No se pudo guardar la copia",
+    "Your name (so the others know who spent what)" to "Tu nombre (para que los demás sepan quién gastó qué)",
+    "Its budgets are on this phone now." to "Sus presupuestos ya están en este teléfono.",
+    "Not a Sobres file" to "No es un archivo de Sobres",
+    "Finding the budget…" to "Buscando el presupuesto…",
+    "Tell me when someone adds an entry" to "Avisarme cuando alguien anota algo",
+    "Restored from a backup: {n} of your budgets are back" to "Restaurado desde una copia: volvieron {n} de tus presupuestos",
+    "; shared budgets open for editing once someone in them is online" to "; los compartidos se pueden editar cuando alguien de ellos esté conectado",
+    "Your previous device can still see {n} shared budget. Lost or stolen?" to "Tu dispositivo anterior todavía puede ver {n} presupuesto compartido. ¿Se perdió o te lo robaron?",
+    "Your previous device can still see {n} shared budgets. Lost or stolen?" to "Tu dispositivo anterior todavía puede ver {n} presupuestos compartidos. ¿Se perdió o te lo robaron?",
+    ". The budget on this device is added to them." to ". El presupuesto de este dispositivo se suma a ellos.",
+    ". The {n} budgets on this device are added to them." to ". Los {n} presupuestos de este dispositivo se suman a ellos.",
+    "Start my budget" to "Empezar mi presupuesto",
+    "Or" to "O",
+    "Join someone's budget" to "Unirme al presupuesto de alguien",
+    "Link to my own other phone or computer" to "Vincular con mi otro teléfono o computadora",
+    "Not in an envelope yet" to "Sin repartir",
+    "Put your money in envelopes: tap Fill" to "Repartí tu plata en sobres: tocá Llenar",
+    "Undo someone's changes…" to "Deshacer cambios de alguien…",
+    "Invite made. Waiting for someone to join." to "Invitación creada. Esperando que alguien se una.",
+    "Show invite" to "Ver invitación",
+    "Delete {name} for everyone?" to "¿Borrar {name} para todos?",
+    "It is shared: it goes from every device that joined it, with all its entries." to "Está compartido: se borra de todos los dispositivos que se unieron, con todos sus movimientos.",
+    "It goes from {people}'s devices too, with all its entries." to "También se borra de los dispositivos de {people}, con todos sus movimientos.",
+    "Delete for everyone" to "Borrar para todos",
+    "Someone" to "Alguien",
+    "Add each month's amount" to "Sumar el monto de cada mes",
+    "Fill up to each month's amount" to "Completar hasta el monto de cada mes",
+    "Left over" to "Sobra",
+    "That's {x} more than you have." to "Son {x} más de lo que tenés.",
+    "Move between envelopes" to "Mover entre sobres",
+    "Move between accounts" to "Mover entre cuentas",
+    "Type an amount" to "Escribí un monto",
+    "Use numbers, like {x}" to "Usá números, como {x}",
+    "Add an account first (Accounts)" to "Primero agregá una cuenta (Cuentas)",
+    "Pick an account" to "Elegí una cuenta",
+    "Add an envelope first" to "Primero agregá un sobre",
+    "Pick an envelope" to "Elegí un sobre",
+    "Pick where the money goes" to "Elegí adónde va la plata",
+    "Pick two different accounts" to "Elegí dos cuentas distintas",
+    "{name} will be {x} short. Fill it from Not in an envelope yet." to "A {name} le van a faltar {x}. Llenalo desde Sin repartir.",
+    "Check your entries against your bank statement." to "Compará tus movimientos con el resumen del banco.",
+    "Statement of {date}" to "Resumen del {date}",
+    "Balance on the statement" to "Saldo del resumen",
+    "Ticked so far" to "Tildado hasta ahora",
+    "By {date}" to "Para {date}",
+    "Spent in total" to "Gastado",
+    "Received in total" to "Recibido",
+    "How much do you owe on it?" to "¿Cuánto debés en ella?",
+    "Overdrawn (below zero)" to "En rojo (bajo cero)",
+    "This changes Not in an envelope yet by the same amount." to "Esto cambia Sin repartir en el mismo monto.",
+    "OK" to "OK",
+    "This is an invite to a budget, not a device link. Open ☰ › Join a shared budget." to "Esto es una invitación a un presupuesto, no un vínculo de dispositivo. Abrí ☰ › Unirme a un presupuesto compartido.",
+    "This is a device link, not an invite. Open ☰ › Link to my other device." to "Esto es un vínculo de dispositivo, no una invitación. Abrí ☰ › Vincular con mi otro dispositivo.",
+    "This isn't a Sobres backup file." to "No es un archivo de copia de Sobres.",
+    "Deleted {name} for everyone in it" to "Borraste {name} para todos los que lo usan",
+    "Delete list for everyone" to "Borrar la lista para todos",
+    "Light or dark" to "Claro u oscuro",
+    "Same as the system" to "Igual que el sistema",
+    "Light" to "Claro",
+    "Dark" to "Oscuro",
+    "Advanced" to "Avanzado",
+    "Lets this device pass along encrypted updates for other Sobres users. It can't read them. Uses some data and battery." to "Deja que este dispositivo pase actualizaciones cifradas de otras personas que usan Sobres. No las puede leer. Usa algo de datos y batería.",
+    "When on, other Sobres users whose devices can't reach each other directly can connect through this computer. Everything stays encrypted." to "Si está activado, otras personas que usan Sobres y cuyos dispositivos no se alcanzan directamente pueden conectarse a través de esta computadora. Todo sigue cifrado.",
+    "Not sent yet: your newest changes are only on this device." to "Sin enviar: tus últimos cambios solo están en este dispositivo.",
+    "the others last synced {when}" to "los demás sincronizaron por última vez {when}",
+    "the others haven't synced yet" to "los demás todavía no sincronizaron",
+    "Sent" to "Enviado",
+    "Link another device" to "Vincular otro dispositivo",
+    "On your other device, open ☰ › Link to my other device, then enter this code or scan it." to "En tu otro dispositivo abrí ☰ › Vincular con mi otro dispositivo y escribí este código o escanealo.",
+    "Your devices ({n}) · Link another device" to "Tus dispositivos ({n}) · Vincular otro",
+    "Link to my other device" to "Vincular con mi otro dispositivo",
+    "This is an invite to a list, not a device link. Open ☰ › Join a shared list." to "Esto es una invitación, no un vínculo de dispositivo: usá ☰ › Unirme a una lista compartida",
+    "This is a device link code, not an invite. Open ☰ › Link to my other device." to "Esto es un código para vincular un dispositivo, no una invitación. Abrí ☰ › Vincular con mi otro dispositivo.",
+    "Undo recent changes" to "Deshacer cambios recientes",
+    "Last hour" to "Última hora",
+    "Last day" to "Último día",
+    "Last 3 days" to "Últimos 3 días",
+    "Last 30 days" to "Últimos 30 días",
+    "Free and open source. No ads, no account." to "Gratis y de código abierto. Sin anuncios, sin cuenta.",
+    "Source code" to "Código fuente",
+    "Privacy" to "Privacidad",
+    "Couldn't save. Try again." to "No se pudo guardar. Probá de nuevo.",
+    "Couldn't share. Check your connection and try again." to "No se pudo compartir. Revisá la conexión y probá de nuevo.",
+    "Couldn't undo. Try again." to "No se pudo deshacer. Probá de nuevo.",
     "Backup password" to "Contraseña de la copia",
     "Change backup password" to "Cambiar la contraseña de la copia",
     "Backups will need this password to open, also on a new phone. If you forget it, they can't be opened." to "Las copias van a pedir esta contraseña para abrirse, también en un teléfono nuevo. Si la olvidás, no se pueden abrir.",
@@ -58,7 +181,7 @@ val ES: Map<String, String> = mapOf(
     "Search" to "Buscar",
     "Search all your lists" to "Buscar en todas tus listas",
     "Nothing matches “{q}”" to "Nada coincide con “{q}”",
-    "Clear" to "Borrar",
+    "Clear" to "Limpiar", // not "Borrar": that is Delete (U-T24)
     "Starred" to "Destacadas",
     "Star" to "Destacar",
     "Nothing starred" to "Nada destacado",
@@ -123,7 +246,7 @@ val ES: Map<String, String> = mapOf(
     "(untitled)" to "(sin título)",
     "Undo changes…" to "Deshacer cambios…",
     "Delete list" to "Borrar lista",
-    "Shared with " to "Compartida con ",
+    "Shared with " to "Compartido con ",
     "Invite" to "Invitar",
     "Invite someone" to "Invitar a alguien",
     "Share" to "Compartir",
@@ -388,7 +511,7 @@ val ES: Map<String, String> = mapOf(
     "How much is in your bank account today?" to "¿Cuánto hay hoy en tu cuenta del banco?",
     "Including the {x} you just got" to "Con los {x} que acabás de recibir",
     "Into" to "A la cuenta",
-    "Join a shared budget" to "Unirse a un presupuesto compartido",
+    "Join a shared budget" to "Unirme a un presupuesto compartido",
     "Left in Available" to "Queda disponible",
     "Monthly" to "Mensual",
     "Monthly amount" to "Monto mensual",
@@ -467,5 +590,5 @@ val ES: Map<String, String> = mapOf(
     "{x} behind" to "{x} atrasado",
     "{x} still to split" to "faltan repartir {x}",
     "Open Sobres" to "Abrir Sobres",
-    "This phone is stopping Sobres from syncing in the background, so shared budgets only update while the app is open. To fix it, allow background activity for Sobres in its battery settings." to "Este teléfono no deja que Sobres se sincronice en segundo plano, así que los presupuestos compartidos solo se actualizan con la app abierta. Para arreglarlo, permití la actividad en segundo plano para Sobres en la configuración de batería.",
+    "This phone is stopping Sobres from syncing in the background, so shared budgets only update while the app is open. To fix it, allow background activity for Sobres in its battery settings." to "Este teléfono no deja que Sobres se sincronice en segundo plano, así que los presupuestos compartidos solo se actualizan con la app abierta. Para arreglarlo, permití la actividad en segundo plano para Sobres en la ajustes de batería.",
 )

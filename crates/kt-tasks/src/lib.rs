@@ -203,17 +203,27 @@ pub const NAME_MAX: usize = 80;
 /// so nobody can pose as someone else in "X joined" or an assignee; emoji joiners stay (family and flag emoji),
 /// runs of spaces become one, and it is cut to [`NAME_MAX`]. Applied where names are written and read.
 pub fn clean_name(s: &str) -> String {
+    clean_to(s, NAME_MAX)
+}
+
+/// [`clean_name`] with another length: also used for task titles on read (second-pass audit T2-14g, rule 15).
+pub fn clean_to(s: &str, max: usize) -> String {
     let kept: String = s
         .chars()
         .map(|c| if c == '\n' || c == '\r' || c == '\t' { ' ' } else { c })
-        .filter(|c| {
-            !c.is_control()
-                && !matches!(*c,
-                    '\u{061C}' | '\u{200B}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}'
-                    | '\u{2066}'..='\u{2069}' | '\u{FEFF}' | '\u{180E}' | '\u{00AD}')
-        })
+        .filter(|c| !c.is_control() && !is_invisible(*c))
         .collect();
-    kept.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(NAME_MAX).collect()
+    kept.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(max).collect()
+}
+
+/// Invisible and direction-changing characters (rule 15): they go from names, titles and every CSV cell (QR Q2-7:
+/// one of them in front of `=` hid a formula start).
+pub fn is_invisible(c: char) -> bool {
+    matches!(c,
+        '\u{061C}' | '\u{200B}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}'
+        | '\u{2066}'..='\u{2069}' | '\u{FEFF}' | '\u{180E}' | '\u{00AD}'
+        // as the web apps' cleaner (Sumate pass 2): grapheme joiner, line/paragraph separators, blank braille
+        | '\u{034F}' | '\u{2028}' | '\u{2029}' | '\u{2800}' | '\u{E0001}')
 }
 
 pub fn rename_list(doc: &LoroDoc, name: &str) -> Result<()> {
@@ -498,12 +508,43 @@ pub fn move_task_next_to(doc: &LoroDoc, task: &str, other: &str, after: bool) ->
     Ok(())
 }
 
+/// Read-side limits on what other devices wrote (second-pass audit T2-3, APP-RULES 60): subtasks deeper than this are
+/// not shown (the screen shows a few levels; a tree hundreds deep overflowed the reader's stack), titles and notes are
+/// cut, and a reminder time must be before the year 2200.
+pub const MAX_DEPTH: usize = 32;
+pub const TITLE_MAX: usize = 2_000;
+pub const NOTES_MAX: usize = 50_000;
+const REMIND_MAX_MS: i64 = 7_258_118_400_000;
+
+/// A task id in the app's own shape (24 hex characters, `new_task_id`).
+pub fn valid_task_id(s: &str) -> bool {
+    s.len() == 24 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn cut(s: String, max: usize) -> String {
+    if s.len() <= max { s } else { s.chars().take(max).collect() }
+}
+
 fn view_of(t: &LoroTree, n: TreeID) -> Option<TaskView> {
+    view_at(t, n, 0, &mut std::collections::HashSet::new())
+}
+
+/// One task and its subtasks, at most [`MAX_DEPTH`] levels down (so the recursion is bounded); a task without a
+/// valid id, or with an id already seen in this read, is left out with its subtasks.
+fn view_at(t: &LoroTree, n: TreeID, depth: usize, seen: &mut std::collections::HashSet<String>) -> Option<TaskView> {
     let meta = t.get_meta(n).ok()?;
-    let children = t.children(Some(n)).unwrap_or_default().into_iter().filter_map(|c| view_of(t, c)).collect();
+    let id = get_str(&meta, "id").filter(|i| valid_task_id(i))?;
+    if !seen.insert(id.clone()) {
+        return None;
+    }
+    let children = if depth + 1 >= MAX_DEPTH {
+        vec![]
+    } else {
+        t.children(Some(n)).unwrap_or_default().into_iter().filter_map(|c| view_at(t, c, depth + 1, seen)).collect()
+    };
     Some(TaskView {
         remind_ms: match meta.get("remind_ms") {
-            Some(ValueOrContainer::Value(LoroValue::I64(v))) if v > 0 => Some(v as u64),
+            Some(ValueOrContainer::Value(LoroValue::I64(v))) if v > 0 && v < REMIND_MAX_MS => Some(v as u64),
             _ => None,
         },
         repeat: get_str(&meta, "repeat").filter(|r| valid_repeat(r)),
@@ -525,10 +566,10 @@ fn view_of(t: &LoroTree, n: TreeID) -> Option<TaskView> {
             .map(|s| s.split(',').filter(|d| d.len() == 64 && d.bytes().all(|b| b.is_ascii_hexdigit())).map(str::to_string).collect::<Vec<_>>())
             .filter(|d| !d.is_empty())
             .map(|d| (d, get_str(&meta, "assign_name").unwrap_or_default())),
-        id: get_str(&meta, "id").unwrap_or_default(),
-        title: get_str(&meta, "title").unwrap_or_default(),
+        id,
+        title: clean_to(&get_str(&meta, "title").unwrap_or_default(), TITLE_MAX),
         done: get_bool(&meta, "done").unwrap_or(false),
-        notes: get_str(&meta, "notes").unwrap_or_default(),
+        notes: cut(get_str(&meta, "notes").unwrap_or_default(), NOTES_MAX),
         images: images_of(&meta),
         children,
     })
@@ -585,20 +626,13 @@ pub fn activity(doc: &LoroDoc) -> Vec<TaskActivity> {
 
 pub fn tasks(doc: &LoroDoc) -> Vec<TaskView> {
     let t = tree(doc);
-    t.roots().into_iter().filter_map(|n| view_of(&t, n)).collect()
+    let mut seen = std::collections::HashSet::new();
+    t.roots().into_iter().filter_map(|n| view_at(&t, n, 0, &mut seen)).collect()
 }
 
 /// Canonical, ID-stable representation of a list's live state. Two documents with equal
 /// normalized states show the same list, even if their Loro internals differ.
 pub fn normalized(doc: &LoroDoc) -> Vec<u8> {
-    fn walk(t: &LoroTree, n: TreeID, depth: usize, out: &mut String) {
-        if let Ok(meta) = t.get_meta(n) {
-            out.push_str(&format!("{depth}|{}\n", canonical(&meta.get_deep_value())));
-        }
-        for c in t.children(Some(n)).unwrap_or_default() {
-            walk(t, c, depth + 1, out);
-        }
-    }
     let mut out = String::new();
     // Every root map (list meta; group docs' lists, people, ...; profile, index), not just
     // the task tree: a rebuild that dropped any of them must not verify.
@@ -606,8 +640,14 @@ pub fn normalized(doc: &LoroDoc) -> Vec<u8> {
         out.push_str(&format!("map {name}|{}\n", canonical(&v)));
     }
     let t = tree(doc);
-    for r in t.roots() {
-        walk(&t, r, 0, &mut out);
+    // A loop, not recursion (T2-3): same pre-order as before.
+    let mut stack: Vec<(TreeID, usize)> = t.roots().into_iter().map(|r| (r, 0)).rev().collect();
+    while let Some((n, depth)) = stack.pop() {
+        if let Ok(meta) = t.get_meta(n) {
+            out.push_str(&format!("{depth}|{}\n", canonical(&meta.get_deep_value())));
+        }
+        let kids: Vec<_> = t.children(Some(n)).unwrap_or_default().into_iter().map(|c| (c, depth + 1)).collect();
+        stack.extend(kids.into_iter().rev());
     }
     out.into_bytes()
 }
@@ -671,7 +711,9 @@ pub fn rebuild(doc: &LoroDoc, peer: u64) -> Result<LoroDoc> {
     }
     let st = tree(doc);
     let dt = tree(&fresh);
-    fn copy(st: &LoroTree, dt: &LoroTree, src: TreeID, dst_parent: Option<TreeID>, index: usize) -> Result<()> {
+    // A loop, not recursion: the tree comes from other devices and may be any depth (T2-3).
+    let mut stack: Vec<(TreeID, Option<TreeID>, usize)> = st.roots().into_iter().enumerate().map(|(i, r)| (r, None, i)).rev().collect();
+    while let Some((src, dst_parent, index)) = stack.pop() {
         let node = dt.create_at(dst_parent, index).map_err(loro)?;
         let dm = dt.get_meta(node).map_err(loro)?;
         if let Ok(sm) = st.get_meta(src) {
@@ -681,13 +723,8 @@ pub fn rebuild(doc: &LoroDoc, peer: u64) -> Result<LoroDoc> {
                 }
             }
         }
-        for (i, c) in st.children(Some(src)).unwrap_or_default().into_iter().enumerate() {
-            copy(st, dt, c, Some(node), i)?;
-        }
-        Ok(())
-    }
-    for (i, r) in st.roots().into_iter().enumerate() {
-        copy(&st, &dt, r, None, i)?;
+        let kids: Vec<_> = st.children(Some(src)).unwrap_or_default().into_iter().enumerate().map(|(i, c)| (c, Some(node), i)).collect();
+        stack.extend(kids.into_iter().rev());
     }
     fresh.commit();
     Ok(fresh)

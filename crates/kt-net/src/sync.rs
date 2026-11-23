@@ -113,6 +113,9 @@ pub struct Syncer {
     seen: Mutex<HashMap<(usize, [u8; 32], [u8; 32]), u64>>,
     /// Slots the last read showed missing (force a rewrite).
     lost: Mutex<HashSet<(usize, [u8; 32], [u8; 32])>>,
+    /// Groups whose newest changes no shared mailbox took in the last write round (only on this device for
+    /// now). Shown as "Saved on this device" on the list (cold UX review U-T4).
+    waiting: Mutex<HashSet<kt_engine::ids::GroupId>>,
     state_file: Option<PathBuf>,
     store: Arc<SlotStore>,
 }
@@ -146,6 +149,7 @@ impl Syncer {
             written: Mutex::new(st.written.into_iter().collect()),
             seen: Mutex::new(st.seen.into_iter().collect()),
             lost: Mutex::new(HashSet::new()),
+            waiting: Mutex::new(HashSet::new()),
             state_file,
             store: Arc::new(SlotStore::open(store_file)),
         })
@@ -197,7 +201,14 @@ impl Syncer {
         let mailboxes = self.mbs();
         // layers that didn't answer within LAYER_CAP: not tried again this round (each slot would wait as long)
         let slow: Mutex<HashSet<usize>> = Mutex::new(HashSet::new());
+        // A group waits while no shared mailbox holds its slots' current contents (U-T4).
+        let mut waiting: HashSet<kt_engine::ids::GroupId> = HashSet::new();
         for (t, fp) in plans {
+            let mut held = mailboxes.is_empty()
+                || (0..mailboxes.len()).any(|mi| {
+                    let key = (mi, t.topic, t.writer_seed);
+                    !self.lost.lock().expect("lock").contains(&key) && self.written.lock().expect("lock").get(&key).is_some_and(|w| w.fingerprint == fp)
+                });
             let due: Vec<usize> = (0..mailboxes.len())
                 .chain(std::iter::once(STORE))
                 .filter(|mi| {
@@ -219,6 +230,9 @@ impl Syncer {
             let t2 = t.clone();
             let Ok(Ok(blob)) = tokio::task::spawn_blocking(move || replica.lock().expect("replica lock").slot_blob(&t2)).await else {
                 report.failed += 1;
+                if !held {
+                    waiting.insert(t.group);
+                }
                 continue;
             };
             let w = SlotWrite { topic: t.topic, writer_seed: t.writer_seed, blob };
@@ -242,6 +256,7 @@ impl Syncer {
                 match o {
                     WriteOutcome::Stored { stored, tried } => {
                         report.written += 1;
+                        held = true;
                         self.written.lock().expect("lock").insert(key, Written { fingerprint: fp, at: written_at(now_secs(), stored, tried) });
                         self.lost.lock().expect("lock").remove(&key);
                     }
@@ -249,9 +264,19 @@ impl Syncer {
                     WriteOutcome::Refused(_) | WriteOutcome::Unavailable => report.failed += 1,
                 }
             }
+            if !held {
+                waiting.insert(t.group);
+            }
         }
+        *self.waiting.lock().expect("lock") = waiting;
         self.save();
         report
+    }
+
+    /// Whether this group's newest changes are, as far as the last write round knows, only on this device
+    /// (no shared mailbox took them yet). False before the first round.
+    pub fn is_waiting(&self, g: &kt_engine::ids::GroupId) -> bool {
+        self.waiting.lock().expect("lock").contains(g)
     }
 
     /// Read members' slots from every mailbox and apply new versions. Repeats while reading
@@ -277,7 +302,10 @@ impl Syncer {
             let reads = read_all(&mailboxes, &topic_ids).await;
             // Group new slot versions by topic.
             let mut by_topic: HashMap<[u8; 32], Vec<Vec<u8>>> = HashMap::new();
-            let mut marked: HashMap<[u8; 32], Vec<Key>> = HashMap::new();
+            // Second-pass audit T2-7: a slot is marked as seen and kept in the store (to be passed on) only once it
+            // opened (signature and seal good), so a made-up slot "from" a real writer can't block that writer.
+            let mut held: HashMap<[u8; 32], Vec<(Key, SlotRead)>> = HashMap::new();
+            let too_new = now_ms().saturating_add(86_400_000); // a version is a time in ms: not days ahead
             for (mi, slots) in reads.into_iter().enumerate() {
                 // a layer that didn't answer in time: nothing from it this round (and no read-back verdict)
                 let Some(slots) = slots else { continue };
@@ -290,15 +318,17 @@ impl Syncer {
                         continue;
                     }
                     let key = (mi, s.topic, s.writer);
-                    let mut seen = self.seen.lock().expect("lock");
+                    let seen = self.seen.lock().expect("lock");
                     if seen.get(&key).is_some_and(|v| *v >= s.version) {
                         report.already_seen += 1;
                         continue;
                     }
-                    seen.insert(key, s.version);
-                    self.store.put(&s);
-                    marked.entry(s.topic).or_default().push(key);
-                    by_topic.entry(s.topic).or_default().push(s.blob);
+                    if s.version > too_new {
+                        report.rejected += 1;
+                        continue;
+                    }
+                    by_topic.entry(s.topic).or_default().push(s.blob.clone());
+                    held.entry(s.topic).or_default().push((key, s));
                 }
                 // Read-back: our own slots this mailbox should have returned.
                 for t in &my_targets {
@@ -315,6 +345,7 @@ impl Syncer {
             for t in new_topics {
                 let Some(blobs) = by_topic.remove(&t.topic) else { continue };
                 let topic = t.topic;
+                let one = t.clone();
                 let replica = self.replica.clone();
                 let res = tokio::task::spawn_blocking(move || {
                     let refs: Vec<&[u8]> = blobs.iter().map(|b| b.as_slice()).collect();
@@ -325,12 +356,32 @@ impl Syncer {
                     report.slots_opened += n;
                     report.messages += r.messages;
                     report.rejected += r.failed + r.bad_slots;
-                    if r.parked > 0 {
-                        // Something in these slots waits for data we don't have yet: read
-                        // them again next time instead of trusting in-memory parking.
+                    let slots = held.remove(&topic).unwrap_or_default();
+                    // Something in these slots waits for data we don't have yet (r.parked): nothing is marked, so
+                    // they are read again next time instead of trusting in-memory parking.
+                    if r.parked == 0 {
+                        let good: Vec<bool> = if r.bad_slots == 0 {
+                            vec![true; slots.len()]
+                        } else {
+                            // Some slot here didn't open: find which, one at a time (rare).
+                            let mut g = Vec::with_capacity(slots.len());
+                            for (_, s) in &slots {
+                                let (replica, blob, one) = (self.replica.clone(), s.blob.clone(), one.clone());
+                                let ok = tokio::task::spawn_blocking(move || {
+                                    replica.lock().expect("replica lock").open_slots(&one, &[blob.as_slice()]).is_ok_and(|x| x.bad_slots == 0)
+                                })
+                                .await
+                                .unwrap_or(false);
+                                g.push(ok);
+                            }
+                            g
+                        };
                         let mut seen = self.seen.lock().expect("lock");
-                        for k in marked.remove(&topic).unwrap_or_default() {
-                            seen.remove(&k);
+                        for ((key, s), ok) in slots.into_iter().zip(good) {
+                            if ok {
+                                seen.insert(key, s.version);
+                                self.store.put(&s);
+                            }
                         }
                     }
                 }

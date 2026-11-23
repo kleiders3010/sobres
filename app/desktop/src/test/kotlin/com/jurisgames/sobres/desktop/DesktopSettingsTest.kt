@@ -4,6 +4,7 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import com.jurisgames.sobres.core.KtNode
 import com.jurisgames.sobres.core.NodeOptions
 import com.jurisgames.sobres.core.Platform
@@ -32,11 +33,13 @@ class DesktopSettingsTest {
         rule.setContent { SobresApp(n) }
         rule.onNodeWithTag("settingsOpen").performClick()
         rule.waitUntil(5_000) { shown("set-notify") }
+        rule.onNodeWithTag("advancedOpen").performClick() // network help is folded away (U-T11)
+        rule.waitUntil(5_000) { shown("help-off") }
         check(shown("set-relay")) { "relay setting on desktop (D51)" }
         check(shown("set-autostart"))
         check(shown("help-on") && shown("help-off") && !shown("help-wifi_and_charging"))
-        rule.onNodeWithTag("set-notify").performClick()
-        rule.onNodeWithTag("help-off").performClick()
+        rule.onNodeWithTag("set-notify").performScrollTo().performClick()
+        rule.onNodeWithTag("help-off").performScrollTo().performClick()
         rule.onNodeWithTag("settingsSave").performClick()
         rule.waitUntil(5_000) { !shown("settingsSave") }
         n.close()
@@ -50,6 +53,8 @@ class DesktopSettingsTest {
         rule.setContent { SobresApp(n) }
         rule.onNodeWithTag("settingsOpen").performClick()
         rule.waitUntil(5_000) { shown("set-notify") }
+        rule.onNodeWithTag("advancedOpen").performClick() // network help is folded away (U-T11)
+        rule.waitUntil(5_000) { shown("help-off") }
         check(!shown("set-relay")) { "not shown at all on phones (D51)" }
         check(!shown("set-autostart"))
         check(shown("help-wifi_and_charging") && shown("help-wifi_while_open") && shown("help-off") && !shown("help-on"))

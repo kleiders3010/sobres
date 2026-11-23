@@ -27,14 +27,18 @@ impl App {
         let r = self.lock();
         let names = super::notify::people(&r, &list.group);
         let mine: HashSet<DeviceId> = r.members(&meta.personal).into_iter().collect();
-        let mut by_name: BTreeMap<(bool, String), Vec<DeviceId>> = BTreeMap::new();
+        // Our own devices are one person (we know they are ours: the account group). Anyone else is one person per
+        // device: a name is what its owner typed, so two members with the same name stay two people (second-pass
+        // Sobres audit S3-4: otherwise "Undo changes by Ana" also undid whoever called themselves Ana).
+        let mut by_name: BTreeMap<(bool, String, String), Vec<DeviceId>> = BTreeMap::new();
         for d in r.members(&list.group) {
             let is_me = mine.contains(&d) || d == r.device_id();
             // Our own devices by our name (the personal group doesn't publish names).
             let name = if is_me && !own_name.is_empty() { own_name.clone() } else { names.get(&d.to_hex()).cloned().unwrap_or_else(|| "Someone".into()) };
-            by_name.entry((is_me, name)).or_default().push(d);
+            let key = if is_me { String::new() } else { d.to_hex() };
+            by_name.entry((is_me, name, key)).or_default().push(d);
         }
-        by_name.into_iter().map(|((is_me, name), devices)| Person { name, devices, is_me }).collect()
+        by_name.into_iter().map(|((is_me, name, _), devices)| Person { name, devices, is_me }).collect()
     }
 
     /// Undo what `person` did in `list` since `since_ms`, as new edits (other people's

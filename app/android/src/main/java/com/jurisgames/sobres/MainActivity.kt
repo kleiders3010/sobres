@@ -53,7 +53,7 @@ class MainActivity : ComponentActivity() {
                         val l = withContext(Dispatchers.IO) { node.importListFile(null, contentResolver.openInputStream(uri)!!.use { it.readBytes() }) }
                         tr("Imported {name}", "name" to l.name)
                     } catch (e: Exception) {
-                        tr(e.message ?: tr("Not a list file"))
+                        com.jurisgames.sobres.ui.userError(e, tr("Not a Sobres file"))
                     }
                     Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
                 }
@@ -74,7 +74,22 @@ class MainActivity : ComponentActivity() {
                     }
                 } catch (e: Exception) {
                     node = app.node
-                    Toast.makeText(this@MainActivity, tr(e.message ?: tr("Restore failed")), Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@MainActivity, com.jurisgames.sobres.ui.userError(e, tr("Restore failed")), Toast.LENGTH_LONG).show()
+                }
+            }
+            // U-S7: every budget in one file the person keeps (Drive, Downloads), the format Restore reads.
+            val saveBackup = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+                if (uri != null) scope.launch {
+                    val ok = withContext(Dispatchers.IO) {
+                        runCatching {
+                            val tmp = java.io.File(cacheDir, "backup-out.ktbackup")
+                            try {
+                                node.writeBackup(tmp.path)
+                                contentResolver.openOutputStream(uri)!!.use { out -> tmp.inputStream().use { it.copyTo(out) } }
+                            } finally { tmp.delete() }
+                        }.isSuccess
+                    }
+                    Toast.makeText(this@MainActivity, if (ok) tr("Backup saved") else tr("Couldn't save the backup"), Toast.LENGTH_LONG).show()
                 }
             }
             val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -87,7 +102,11 @@ class MainActivity : ComponentActivity() {
                 startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, link), tr("Share invite")))
             }, update = update.value, required = required.value, onUpdate = { link ->
                 startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(link)))
-            }, onScan = { QrScanner.scan(this, it) }, openedCode = opened.value, onSettings = { app.applyBackgroundSync(it.syncInBackground) }, onRestore = { pick.launch(arrayOf("*/*")) }, onRestoreWith = { bytes, pw -> restore({ bytes }, pw) }, onExport = { l ->
+            }, onScan = { QrScanner.scan(this, it) }, openedCode = opened.value, onSettings = { s ->
+                app.applyBackgroundSync(s.syncInBackground)
+                if (s.notifyChanges && !notifyChangesWas) askForNotificationsWhenShared(force = true)
+                notifyChangesWas = s.notifyChanges
+            }, onShared = { askForNotificationsWhenShared() }, backHandler = { enabled, back -> androidx.activity.compose.BackHandler(enabled, back) }, onRestore = { pick.launch(arrayOf("*/*")) }, onSaveBackup = { saveBackup.launch("Sobres-${java.time.LocalDate.now()}.ktbackup") }, onRestoreWith = { bytes, pw -> restore({ bytes }, pw) }, onExport = { l ->
                 // The activity as a CSV file, shared to any app (Sheets, email, Drive).
                 // Only the export being shared stays (round 5, S9): older copies of the whole budget go first.
                 val dir = java.io.File(cacheDir, "exports").apply { listFiles()?.forEach { it.delete() }; mkdirs() }
@@ -100,7 +119,8 @@ class MainActivity : ComponentActivity() {
                     .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 startActivity(Intent.createChooser(send, tr("Export {name}", "name" to l.name)))
             })
-            var blocked by remember { mutableStateOf(BackgroundCheck.shouldExplain(this@MainActivity)) }
+            // Only someone with a shared list is told about shared lists (cold UX review U-T5).
+            var blocked by remember { mutableStateOf(app.node.groups().any { !it.personal } && BackgroundCheck.shouldExplain(this@MainActivity)) }
             if (blocked) androidx.compose.material3.AlertDialog(
                 onDismissRequest = { blocked = false },
                 title = { androidx.compose.material3.Text(tr("Updates only while the app is open")) },
@@ -205,18 +225,27 @@ class MainActivity : ComponentActivity() {
         app.reportDeviceState()
         multicast.acquire() // Android drops multicast (LAN beacons) without it
         app.node.startLive() // app open: live on every layer
-        askForNotificationsWhenShared()
         checkForUpdate()
         val current = packageManager.getPackageInfo(packageName, 0).longVersionCode.toULong()
         required.value = runCatching { app.node.requiredUpdate(current, Store.UPDATE_CHANNEL) }.getOrNull()
     }
 
+    private var notifyChangesWas = true
+
     /** Asked the first time it's relevant: once this device is in a shared group (§12). */
     private val notifyPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
-    private fun askForNotificationsWhenShared() {
+    /**
+     * U-S2: asked when it matters (a budget was just shared or joined, or "Tell me when someone adds an entry" was turned
+     * on: [force]), never at app start. Once for the automatic case (cold UX review U-T5).
+     */
+    private fun askForNotificationsWhenShared(force: Boolean = false) {
         if (Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
-        if (app.node.groups().any { !it.personal }) notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        if (force) { notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS); return }
+        val prefs = getSharedPreferences("notify", MODE_PRIVATE)
+        if (prefs.getBoolean("askedNotifyShared", false)) return
+        if (!app.node.settings().notifyChanges) return
+        if (app.node.groups().any { !it.personal }) run { prefs.edit().putBoolean("askedNotifyShared", true).apply(); notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS) }
     }
 
     /** Held while the app is open, for the same-Wi-Fi beacons (§6). */

@@ -200,7 +200,7 @@ impl Replica {
                     continue;
                 }
                 let Some(rec) = state.epochs.record(&e) else { continue };
-                if now.saturating_sub(rec.body.created_ms) < FORWARD_WINDOW_MS {
+                if now.saturating_sub(state.epochs.time_of(&e).unwrap_or(rec.body.created_ms)) < FORWARD_WINDOW_MS {
                     for p in &rec.body.parents {
                         push(*p, SlotRole::Forward);
                         stack.push(*p);
@@ -242,7 +242,9 @@ impl Replica {
             let mut epochs: Vec<(u64, EpochId)> = state
                 .keys
                 .keys()
-                .map(|e| (state.epochs.record(e).map(|r| r.body.created_ms).unwrap_or(u64::MAX), *e))
+                // T2-2: most recent by position in the graph, never by a written time; a refused record is not read at all.
+                .filter(|e| state.epochs.record(e).is_none() || state.epochs.is_valid(e))
+                .map(|e| (state.epochs.depth(e).unwrap_or(0) as u64, *e))
                 .collect();
             epochs.sort_by(|a, b| b.cmp(a));
             let mut chosen: Vec<EpochId> = state.epochs.heads().into_iter().filter(|h| state.keys.contains_key(h)).collect();
@@ -502,6 +504,19 @@ impl Replica {
     /// Newest status of every other member that told us one.
     pub fn member_status(&self, g: &GroupId) -> std::collections::BTreeMap<DeviceId, MemberStatus> {
         std::fs::read(self.layout.group_dir(g).join("member_status")).ok().and_then(|b| postcard::from_bytes(&b).ok()).unwrap_or_default()
+    }
+
+    /// When another current member last wrote its slot here (its status record's time, never later than now):
+    /// "Last update from the others" on a shared list (cold UX review U-T4). None if nobody else has yet.
+    pub fn others_last_status_ms(&self, g: &GroupId) -> Option<u64> {
+        let me = self.identity.id();
+        let state = self.groups.get(g)?;
+        let now = super::now_ms();
+        self.member_status(g)
+            .into_iter()
+            .filter(|(m, _)| *m != me && state.epochs.is_current_member(m))
+            .map(|(_, s)| s.created_ms.min(now))
+            .max()
     }
 
     /// Known document generations of other members: (device, doc) -> generation.

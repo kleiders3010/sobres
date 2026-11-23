@@ -11,18 +11,26 @@ routes = [{ pattern = "mailbox.jurisgames.com", custom_domain = true }]
 name = "TOPICS"
 class_name = "Topic"
 
+[[durable_objects.bindings]]
+name = "BUDGET"
+class_name = "Budget"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Topic"]
 
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["Budget"]
+
 # Budgets per network (IPv6 /64), checked in the Worker before a Durable Object wakes (safety audit round 4,
-# T4; round 5, S10: reads 600 -> 300). A device reads its topics every few rounds; these sit above a household on one address.
+# T4; round 5, S10: reads 600 -> 300; second pass T2-4: reads 120, writes 30, plus a day's budget per network in the Budget object). A device reads its topics every few rounds; these sit above a household on one address.
 [[ratelimits]]
 name = "READS"
 namespace_id = "2107"
-simple = { limit = 300, period = 60 }
+simple = { limit = 120, period = 60 }
 
 [[ratelimits]]
 name = "WRITES"
 namespace_id = "2108"
-simple = { limit = 120, period = 60 }
+simple = { limit = 30, period = 60 }

@@ -40,6 +40,17 @@ pub struct RecentLink {
     pub linked_ms: u64,
 }
 
+/// A device that joined one of our shared lists recently ([`App::recent_joins`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecentJoin {
+    pub group: GroupId,
+    pub device: DeviceId,
+    /// The name it gave (may be empty), and the name of the member whose device let it in.
+    pub name: String,
+    pub by: String,
+    pub joined_ms: u64,
+}
+
 /// What [`App::settle_account`] did.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AccountChanges {
@@ -278,5 +289,86 @@ impl App {
             }
         }
         r.remove_member(&meta.personal, device).map_err(eng)
+    }
+
+    fn seen_joins_path(&self) -> std::path::PathBuf {
+        self.data_dir.join("joins_seen")
+    }
+
+    fn seen_joins(&self) -> std::collections::HashSet<String> {
+        std::fs::read_to_string(self.seen_joins_path()).map(|s| s.lines().map(str::to_string).collect()).unwrap_or_default()
+    }
+
+    fn join_key(g: &GroupId, d: &DeviceId) -> String {
+        format!("{}:{}", g.to_hex(), d.to_hex())
+    }
+
+    /// Devices let into one of our shared lists in the last [`RECENT_LINK_MS`] (an invite lets anyone holding its
+    /// words in, with no person pressing anything: second-pass audit T2-13, rule 17). Every member is shown
+    /// "X joined · Remove · OK" until it is dismissed here.
+    pub fn recent_joins(&self) -> Vec<RecentJoin> {
+        let meta = self.meta();
+        let own = self.display_name(); // before the lock: it reads the replica too
+        let r = self.lock();
+        let now = kt_engine::replica::now_ms();
+        let mine = r.members(&meta.personal);
+        let me = r.device_id();
+        let seen = self.seen_joins();
+        let mut out = Vec::new();
+        for g in r.groups() {
+            if g == meta.personal {
+                continue;
+            }
+            let Some(e) = r.epochs(&g) else { continue };
+            if !e.is_current_member(&me) {
+                continue;
+            }
+            let names = super::notify::people(&r, &g); // names each device published itself (S3-4)
+            for rec in e.all_records() {
+                let id = rec.id();
+                if !e.is_valid(&id) {
+                    continue;
+                }
+                let at = e.time_of(&id).unwrap_or(rec.body.created_ms).min(now);
+                if now.saturating_sub(at) >= RECENT_LINK_MS {
+                    continue;
+                }
+                if let kt_engine::epochs::EpochKind::Add { device, .. } = &rec.body.kind {
+                    let d = DeviceId(device.sign);
+                    if mine.contains(&d) || !e.is_current_member(&d) || seen.contains(&Self::join_key(&g, &d)) || out.iter().any(|j: &RecentJoin| j.group == g && j.device == d) {
+                        continue;
+                    }
+                    out.push(RecentJoin {
+                        group: g,
+                        device: d,
+                        name: names.get(&d.to_hex()).cloned().unwrap_or_default(),
+                        by: if mine.contains(&rec.body.creator) { own.clone() } else { names.get(&rec.body.creator.to_hex()).cloned().unwrap_or_default() },
+                        joined_ms: at,
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    /// "OK" on a join notice: not shown again on this device.
+    pub fn dismiss_join(&self, g: &GroupId, d: &DeviceId) -> Result<()> {
+        let mut seen = self.seen_joins();
+        seen.insert(Self::join_key(g, d));
+        let mut lines: Vec<String> = seen.into_iter().collect();
+        lines.sort();
+        storage::write_atomic(&self.seen_joins_path(), lines.join("\n").as_bytes()).map_err(eng)
+    }
+
+    /// "Remove" on a join notice: the device leaves that list (keys rotate), and the notice goes.
+    pub fn remove_joined(&self, g: &GroupId, d: &DeviceId) -> Result<()> {
+        {
+            let mut r = self.lock();
+            if *d == r.device_id() {
+                return Err(Error::Invalid("this device can't remove itself".into()));
+            }
+            r.remove_member(g, *d).map_err(eng)?;
+        }
+        self.dismiss_join(g, d)
     }
 }

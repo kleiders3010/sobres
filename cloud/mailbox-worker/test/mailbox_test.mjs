@@ -10,7 +10,7 @@ const BASE = `http://127.0.0.1:${PORT}`;
 let fail = 0;
 const check = (ok, what) => { console.log((ok ? "ok   " : "FAIL ") + what); if (!ok) fail++; };
 
-const dev = spawn(process.execPath, ["node_modules/wrangler/bin/wrangler.js", "dev", "--ip", "127.0.0.1", "--port", String(PORT)], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+const dev = spawn(process.execPath, ["node_modules/wrangler/bin/wrangler.js", "dev", "--ip", "127.0.0.1", "--port", String(PORT), "--var", "TEST_DAY_READS:50"], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
 let log = "";
 dev.stdout.on("data", (d) => (log += d));
 dev.stderr.on("data", (d) => (log += d));
@@ -34,41 +34,56 @@ function putBody(topic, version, blob) {
   let nonce = 0;
   for (;; nonce++) {
     const h = sha(Buffer.concat([Buffer.from("kt/cloud-pow/v1"), topic, writer, u64(version), u64(nonce)]));
-    if (h[0] === 0 && h[1] === 0) break; // 16 leading zero bits
+    if (h[0] === 0 && h[1] === 0 && h[2] < 16) break; // 20 leading zero bits (second pass T2-4) // pinned: POW_BITS 20
   }
   return Buffer.concat([writer, u64(version), u64(nonce), sig, blob]);
 }
 
+// Bodies first: a 20-bit proof of work takes seconds, and an idle kept-alive connection is closed meanwhile.
+const topic = randomBytes(32);
+const blob = Buffer.from("sealed bytes");
+const goodBody = putBody(topic, 1, blob);
+const bad = putBody(topic, 2, blob);
+bad[60] ^= 1; // break the signature
+const hollowBody = putBody(topic, 3, Buffer.alloc(0));
 try {
   check(await ready(), "wrangler dev is up");
-  const topic = randomBytes(32);
   const url = `${BASE}/v1/t/${topic.toString("hex")}`;
 
   const empty = await fetch(url);
   const eb = Buffer.from(await empty.arrayBuffer());
   check(empty.status === 200 && eb.length === 8 && eb.readBigUInt64LE() === 0n, "a never-written topic reads as empty"); // pinned: wire format rev u64
 
-  const blob = Buffer.from("sealed bytes");
-  const put = await fetch(url, { method: "PUT", body: putBody(topic, 1, blob) });
+  const put = await fetch(url, { method: "PUT", body: goodBody });
   check(put.status === 200 && (await put.text()) === "stored", "a signed put with proof of work is stored"); // pinned: wire format
   const got = Buffer.from(await (await fetch(url)).arrayBuffer());
   check(got.includes(blob), "and reads back");
 
-  const bad = putBody(topic, 2, blob);
-  bad[60] ^= 1; // break the signature
+  const again = await fetch(url, { method: "PUT", body: goodBody });
+  check(again.status === 409 && again.headers.get("X-Version") === "1", "the same version again is refused with what is stored (T2-10)"); // pinned: 409 + X-Version
+
   check((await fetch(url, { method: "PUT", body: bad })).status === 400, "a bad signature is refused"); // pinned: wire contract the shipped apps read
+
+  const hollow = await fetch(url, { method: "PUT", body: hollowBody });
+  check(hollow.status === 400, "an empty slot is refused (T2-4: empty slots cost no bytes, so they'd have no cap)"); // pinned: 400
 
   const big = await fetch(url, { method: "PUT", body: Buffer.alloc(112 + 640 * 1024 + 1) });
   check(big.status === 413, "an oversized put is refused from its length"); // pinned: wire contract (413 = slot too large)
 
-  // A loop of reads from one address: the budget answers 429 well before 1000.
-  let limited = 0;
+  // A loop of reads from one address: the day's budget (lowered to 50 for this test; counted in reports of 100)
+  // answers 429 "day used up" at the first report, before the per-minute limit of 120. The second-pass Sobres audit
+  // (S3-2) found the budget keys had lost their parts, so every network shared one tally that never filled.
+  let limited = 0, why = "";
   for (let i = 0; i < 1000 && !limited; i++) {
     const r = await fetch(`${BASE}/v1/t/${randomBytes(32).toString("hex")}`);
-    if (r.status === 429) limited = i;
+    if (r.status === 429) { limited = i; why = await r.text(); }
     else await r.arrayBuffer();
   }
-  check(limited > 0, `a read loop is cut off (429 after ${limited} reads)`);
+  check(limited > 0 && why === "day used up", `a read loop is cut off by the day's budget (429 "${why}" after ${limited} reads)`); // pinned: "day used up"
+  const after = await fetch(`${BASE}/v1/t/${randomBytes(32).toString("hex")}`);
+  check(after.status === 429 && (await after.text()) === "day used up", "and stays cut off for the day"); // pinned: "day used up" (the apps' back-off reads 429)
+} catch (e) {
+  check(false, `no error (${e.cause?.code || e.message})`);
 } finally {
   dev.kill();
 }

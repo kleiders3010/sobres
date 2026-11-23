@@ -73,7 +73,7 @@ private object TrayIcon : Painter() {
  */
 /** This build's version code (the update manifest compares against it): the same number as the Android build
  * (app/android/build.gradle.kts versionCode), checked by VersionCodeTest. */
-const val VERSION_CODE = 3uL
+const val VERSION_CODE = 4uL
 
 fun main(args: Array<String>) {
     // Packaged app: the Rust library and the import worker ship in its resources folder.
@@ -168,6 +168,10 @@ fun main(args: Array<String>) {
                     if (com.jurisgames.sobres.core.backupNeedsPassword(bytes)) com.jurisgames.sobres.ui.PendingRestore.bytes = bytes
                     else restoreInto(bytes, null)
                 }
+            }, onSaveBackup = {
+                // U-S7: every budget in one file, the format Restore reads (locked with the backup password if one is set).
+                val dialog = FileDialog(null as Frame?, tr("Save a backup file"), FileDialog.SAVE).apply { file = "Sobres-${java.time.LocalDate.now()}.ktbackup"; isVisible = true }
+                dialog.file?.let { File(dialog.directory, it) }?.let { f -> runCatching { node.writeBackup(f.path) } }
             }, onRestoreWith = { bytes, pw -> restoreInto(bytes, pw) }, onExport = { l ->
                 // The activity as a spreadsheet file (one line per envelope part).
                 val dialog = FileDialog(null as Frame?, tr("Export {name}", "name" to l.name), FileDialog.SAVE).apply { file = "${com.jurisgames.sobres.core.exportFileStem(l.name)}.csv"; isVisible = true }

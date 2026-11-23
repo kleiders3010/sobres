@@ -101,12 +101,64 @@ fn undo_a_persons_changes_even_after_a_compaction() {
     }
 
     assert_eq!(alex.lists().len(), 1, "compaction kept the group's list index");
+    // A compacted group doc names its compactor as every entry's last writer, so (S3-4) the names don't count until
+    // each device republishes its own, which it does on its next sync round after seeing the new generation (it
+    // rewrites the entry: the same text written again was no change, so the name never came back when the other
+    // device's compaction won; names_come_back_after_another_member_compacts below).
+    let mut rounds = 0;
+    while !alex.people(&list).iter().any(|p| p.name == "Sam") && rounds < 4 {
+        mb.sync(&[&alex, &sam]);
+        rounds += 1;
+    }
     // Alex undoes Sam's changes since then.
-    let sam_person = alex.people(&list).into_iter().find(|p| p.name == "Sam").expect("Sam");
+    let sam_person = alex.people(&list).into_iter().find(|p| p.name == "Sam").expect("Sam's name is back within 4 rounds");
     assert!(!sam_person.is_me);
     let n = alex.undo_changes_by(&list, &sam_person, since).unwrap();
     assert_eq!(n, 3, "rename, deletion and addition undone");
     assert_eq!(titles(&alex, &list), ["eggs", "milk"]);
     mb.sync(&[&alex, &sam]);
     assert_eq!(titles(&sam, &l), ["eggs", "milk"], "for everyone");
+
+    // Second-pass Sobres audit S3-4: Sam's app writes Alex's name entry as "Sam". Nobody believes a name another
+    // device wrote, so Alex doesn't turn into a second "Sam". pinned: a name counts only from its own device.
+    let alex_hex = alex.with(|r| r.device_id().to_hex());
+    sam.with(|r| {
+        let g = list.group;
+        let gd = r.docs(&g).into_iter().find(|d| r.doc(&g, d).is_some_and(|x| x.get_map("people").get(&alex_hex).is_some())).expect("the group's people");
+        r.doc(&g, &gd).unwrap().get_map("people").insert(&alex_hex, "Sam").unwrap();
+        r.commit(&g, &gd).unwrap();
+    });
+    assert!(sam.people(&l).iter().all(|p| p.is_me || p.name != "Sam"), "a name written by another device is not read");
+}
+
+/// A member's name survives another member compacting the group: the owner writes it again and it counts (it stayed
+/// "Someone" for good when the other side's compaction won, because writing the same text again changed nothing).
+#[test]
+fn names_come_back_after_another_member_compacts() {
+    let mut mb = Mailbox::default();
+    let (alex, sam) = (open("alex2"), open("sam2"));
+    alex.set_display_name("Alex").unwrap();
+    sam.set_display_name("Sam").unwrap();
+    let fam = alex.create_group("Family").unwrap();
+    let list = alex.create_list(Some(fam.group), "Groceries").unwrap();
+    let bundle = alex.share_group_with_device(fam.group, sam.with(|r| r.identity().public())).unwrap();
+    sam.join_from_bundle(fam.group, &bundle).unwrap();
+    mb.sync(&[&alex, &sam]);
+    let l = sam.find_list("Groceries").unwrap();
+    assert!(alex.people(&list).iter().any(|p| p.name == "Sam"), "before: Alex sees Sam");
+    // only Alex compacts: every entry's last writer is Alex now
+    let eager = CompactionPolicy { min_bytes: 0, ratio: 0, active_ms: 30 * 86_400_000, cooldown_ms: 0 };
+    alex.with(|r| r.set_compaction_policy(eager.clone()));
+    for _ in 0..3 {
+        alex.with(|r| {
+            let _ = r.auto_compact();
+        });
+        mb.sync(&[&alex, &sam]);
+    }
+    alex.with(|r| r.set_compaction_policy(CompactionPolicy { min_bytes: usize::MAX, ..Default::default() }));
+    for _ in 0..2 {
+        mb.sync(&[&alex, &sam]);
+    }
+    assert!(alex.people(&list).iter().any(|p| p.name == "Sam"), "Alex sees Sam's name again");
+    assert!(sam.people(&l).iter().any(|p| p.name == "Alex"), "Sam sees Alex's name");
 }

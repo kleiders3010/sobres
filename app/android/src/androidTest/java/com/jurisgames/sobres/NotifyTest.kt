@@ -18,8 +18,8 @@ class NotifyTest {
             inst.uiAutomation.grantRuntimePermission(ctx.packageName, android.Manifest.permission.POST_NOTIFICATIONS)
         }
         val now = System.currentTimeMillis().toULong()
-        fun c(list: String, who: String, kind: String, title: String) = ChangeItem("Family", "id-$list", list, who, kind, title, now)
-        val kim = ChangeItem("Family", "", "", "Kim", "joined", "", now)
+        fun c(list: String, who: String, kind: String, title: String) = ChangeItem("Family", "id-$list", list, who, kind, title, now, 0L, "")
+        val kim = ChangeItem("Family", "", "", "Kim", "joined", "", now, 0L, "")
         ChangeNotifier.post(ctx, listOf(c("Groceries", "Sam", "added", "milk"), c("Groceries", "Sam", "added", "eggs"), c("Groceries", "Sam", "completed", "bread"), c("Trip", "Alex", "added", "passport"), kim))
         // Posting is asynchronous: wait until all three are showing.
         val nm = ctx.getSystemService(NotificationManager::class.java)

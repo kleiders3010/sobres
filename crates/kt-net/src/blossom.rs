@@ -108,7 +108,8 @@ impl Blossom {
         for s in self.up() {
             match self.client.get(format!("{s}/{sha}")).send().await {
                 Ok(r) if r.status().is_success() => {
-                    if let Ok(b) = r.bytes().await {
+                    // read at most a blob's size: a stranger's server can answer with an endless body (T2-8)
+                    if let Some(b) = crate::http::bytes_capped(r, MAX_BLOB + 1024).await {
                         if b.len() <= MAX_BLOB + 1024 && blob_id(&b) == *id {
                             return Some(b.to_vec());
                         }
@@ -279,7 +280,7 @@ impl Blossom {
             return false;
         }
         let back = match self.client.get(format!("{server}/{sha}")).send().await {
-            Ok(r) if r.status().is_success() => r.bytes().await.is_ok_and(|b| b.as_ref() == data.as_slice()),
+            Ok(r) if r.status().is_success() => crate::http::bytes_capped(r, MAX_BLOB + 1024).await.is_some_and(|b| b == data),
             _ => false,
         };
         if let Some(auth) = Self::auth_with(&keys, "delete", &sha) {

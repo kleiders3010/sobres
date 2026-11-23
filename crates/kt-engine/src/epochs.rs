@@ -141,6 +141,9 @@ pub struct GroupEpochs {
     /// Epochs an invite named (round 5, S8). While set and no genesis is known, a genesis is only accepted
     /// once one of these arrives and it is that epoch's founding record: a forged genesis sent first can't win.
     anchors: BTreeSet<EpochId>,
+    /// When each record arrived here, by this device's clock (second-pass audit T2-2): another device's written time
+    /// is never later than this, so a record dated in the future can't stay "newest" or hold off a key change.
+    arrived: HashMap<EpochId, u64>,
 }
 
 impl GroupEpochs {
@@ -158,6 +161,33 @@ impl GroupEpochs {
 
     pub fn all_records(&self) -> impl Iterator<Item = &EpochRecord> {
         self.records.values()
+    }
+
+    /// A record's time for decisions on this device: its written time, cut back to when it arrived here (T2-2, rule 51).
+    pub fn time_of(&self, id: &EpochId) -> Option<u64> {
+        let r = self.records.get(id)?;
+        Some(self.arrived.get(id).map_or(r.body.created_ms, |a| r.body.created_ms.min(*a)))
+    }
+
+    /// Position in the graph: how many records come before this one (T2-2: "most recent" by position, not by a
+    /// written time).
+    pub fn depth(&self, id: &EpochId) -> Option<usize> {
+        self.records.contains_key(id).then(|| self.ancestors_of(id).len())
+    }
+
+    /// When each record arrived here, for keeping across restarts (second-pass Sobres audit S3-8).
+    pub fn arrivals(&self) -> Vec<(EpochId, u64)> {
+        self.arrived.iter().map(|(k, v)| (*k, *v)).collect()
+    }
+
+    /// Put back arrival times kept from before a restart: the earlier time wins (records are inserted again on
+    /// load, which would otherwise date them all to the start).
+    pub fn restore_arrivals(&mut self, saved: &[(EpochId, u64)]) {
+        for (id, t) in saved {
+            if let Some(a) = self.arrived.get_mut(id) {
+                *a = (*a).min(*t);
+            }
+        }
     }
 
     pub fn is_valid(&self, id: &EpochId) -> bool {
@@ -186,6 +216,7 @@ impl GroupEpochs {
             self.group = Some(rec.body.group);
         }
         self.records.insert(id, rec);
+        self.arrived.insert(id, now_ms());
         self.structural.insert(id);
         self.drain_pending();
         Ok(InsertOutcome::Accepted)
@@ -228,6 +259,7 @@ impl GroupEpochs {
                 continue;
             }
             self.records.insert(gid, g);
+            self.arrived.insert(gid, now_ms());
             self.structural.insert(gid);
             self.anchors.clear();
             self.drain_pending();
@@ -252,6 +284,7 @@ impl GroupEpochs {
                 let r = self.pending.remove(&pid).expect("present");
                 if self.check_structure(&r).is_ok() {
                     self.records.insert(pid, r);
+                    self.arrived.insert(pid, now_ms());
                     self.structural.insert(pid);
                 }
             }
@@ -396,12 +429,26 @@ impl GroupEpochs {
         }
         let seniority = |d: &DeviceId| (joined.get(d).copied().unwrap_or(usize::MAX), *d);
         // `x` removes the creator of `r` while the two are concurrent: `x` would refuse `r`.
+        // Second-pass audit T2-1: only if `x`'s signer was a member before the two branches split (a recipient of a
+        // record both come from). A device added on one branch after the split (a removed device's own helper)
+        // carries that branch's removals in its records, but refuses nothing on the other.
         let kills = |x: &EpochId, r: &EpochId| {
-            concurrent(x, r) && self.records[x].body.removed.contains(&self.records[r].body.creator)
+            let signer = self.records[x].body.creator;
+            concurrent(x, r)
+                && self.records[x].body.removed.contains(&self.records[r].body.creator)
+                && ancestors[x].intersection(&ancestors[r]).any(|c| self.records[c].body.recipients.contains_key(&signer))
         };
         // Mutual removal (each removes the other's creator): one wins, never both. First the one a third member
         // built on (an epoch after it, not after the other, by someone neither removal removes and whom no removal
         // outside the other's creator targets); then the device that has been in the group longer.
+        //
+        // Second-pass audit T2-1: only a device that was a recipient of the epochs both removals start from may
+        // confirm, or cancel a confirmation. A device added after the split (by either side) is nobody's witness:
+        // otherwise a removed device adds a helper device of its own and has it "confirm" the removed device's
+        // counter-removal and cancel the real member's confirmation.
+        let original = |x: &EpochId, r: &EpochId, d: &DeviceId| {
+            ancestors[x].intersection(&ancestors[r]).any(|c| self.records[c].body.recipients.contains_key(d))
+        };
         let confirmed = |x: &EpochId, r: &EpochId| {
             let (cx, cr) = (self.records[x].body.creator, self.records[r].body.creator);
             base.iter().any(|y| {
@@ -410,11 +457,13 @@ impl GroupEpochs {
                     && !ancestors[y].contains(r)
                     && by != cx
                     && by != cr
+                    && original(x, r, &by)
                     && !self.records[r].body.removed.contains(&by)
                     && !base.iter().any(|z| {
                         !ancestors[z].contains(y)
                             && z != y
                             && self.records[z].body.creator != cr
+                            && original(x, r, &self.records[z].body.creator)
                             && matches!(&self.records[z].body.kind, EpochKind::Remove { device, .. } if *device == by)
                     })
             })
@@ -612,7 +661,7 @@ impl GroupEpochs {
         // away), the k-th lowest after k × MERGE_FALLBACK_MS. A concurrent double merge is
         // just another fork, merged the same way.
         let rank = inter.keys().position(|d| *d == me.id())?;
-        let fork_age = now_ms().saturating_sub(parents.iter().map(|p| p.body.created_ms).max().unwrap_or(0));
+        let fork_age = now_ms().saturating_sub(heads.iter().filter_map(|h| self.time_of(h)).max().unwrap_or(0));
         if fork_age < rank as u64 * MERGE_FALLBACK_MS {
             return None;
         }
@@ -690,14 +739,26 @@ pub fn genesis(me: &DeviceIdentity, group: GroupId) -> EpochRecord {
 fn build(
     me: &DeviceIdentity,
     group: GroupId,
-    mut parents: Vec<EpochId>,
+    parents: Vec<EpochId>,
     kind: EpochKind,
     recipients: BTreeMap<DeviceId, [u8; 32]>,
     removed: BTreeSet<DeviceId>,
 ) -> EpochRecord {
+    build_at(me, group, parents, kind, recipients, removed, now_ms())
+}
+
+/// [`build`] with a written time of the caller's choice (tests: a record dated in the future).
+fn build_at(
+    me: &DeviceIdentity,
+    group: GroupId,
+    mut parents: Vec<EpochId>,
+    kind: EpochKind,
+    recipients: BTreeMap<DeviceId, [u8; 32]>,
+    removed: BTreeSet<DeviceId>,
+    created_ms: u64,
+) -> EpochRecord {
     parents.sort();
     let key = SymKey::random();
-    let created_ms = now_ms();
     let wrapped = recipients
         .iter()
         .map(|(d, kex)| (*d, crypto::wrap_key(kex, &key, &wrap_aad(&group, &parents, &me.id(), created_ms, d))))
@@ -963,6 +1024,105 @@ mod tests {
         assert_eq!(a.heads().len(), 1);
     }
 
+    /// Second-pass T2-1: the removed device's records on the old head: it removes `victims[0]`, adds a helper device
+    /// of its own, and the helper rotates and removes `victims[1..]`.
+    fn helper_attack(old: &GroupEpochs, attacker: &DeviceIdentity, victims: &[DeviceId]) -> (DeviceIdentity, Vec<EpochRecord>) {
+        let helper = DeviceIdentity::generate();
+        let mut b = old.clone();
+        let mut out = vec![];
+        let rm = b.create_remove(attacker, victims[0], BTreeMap::new()).unwrap();
+        b.insert(rm.clone()).unwrap();
+        let rm_id = rm.id();
+        out.push(rm);
+        let add = b.create_add(attacker, helper.public(), &Default::default()).unwrap();
+        b.insert(add.clone()).unwrap();
+        let add_id = add.id();
+        out.push(add);
+        let rot = b.create_rotate(&helper).unwrap_or_else(|e| panic!("{e}: heads {}, valid {:?}", b.heads().len(), [rm_id, add_id].map(|x| b.is_valid(&x))));
+        b.insert(rot.clone()).unwrap();
+        out.push(rot);
+        for v in &victims[1..] {
+            let rm = b.create_remove(&helper, *v, BTreeMap::new()).unwrap();
+            b.insert(rm.clone()).unwrap();
+            out.push(rm);
+        }
+        (helper, out)
+    }
+
+    /// T2-1, three members: Ana (0) removes Xavi (2), Berta (1) confirms; Xavi removes Ana from the old head, adds
+    /// X9 and X9 "confirms" and removes Berta. pinned: a device added after the split confirms and cancels nothing.
+    #[test]
+    fn removed_device_helper_cannot_confirm_or_cancel() {
+        for attacker_first in [false, true] {
+            let (ds, ge) = setup(3);
+            let mut a = ge.clone();
+            let rm = a.create_remove(&ds[0], ds[2].id(), BTreeMap::new()).unwrap();
+            a.insert(rm.clone()).unwrap();
+            let ack = a.create_rotate(&ds[1]).unwrap();
+            a.insert(ack.clone()).unwrap();
+            let (helper, recs) = helper_attack(&ge, &ds[2], &[ds[0].id(), ds[1].id()]);
+            let mut g = ge.clone();
+            let mut all: Vec<EpochRecord> = if attacker_first { recs.clone() } else { vec![rm.clone(), ack.clone()] };
+            all.extend(if attacker_first { vec![rm, ack] } else { recs });
+            for r in all {
+                let _ = g.insert(r);
+            }
+            assert!(g.is_current_member(&ds[0].id()) && g.is_current_member(&ds[1].id()), "Ana and Berta stay ({attacker_first})");
+            assert!(!g.is_current_member(&ds[2].id()) && !g.is_current_member(&helper.id()), "Xavi and X9 are out ({attacker_first})");
+            let h = g.working_head().unwrap();
+            assert!(g.key_for(&h, &ds[2]).is_err() && g.key_for(&h, &helper).is_err());
+            assert!(g.key_for(&h, &ds[0]).is_ok() && g.key_for(&h, &ds[1]).is_ok());
+        }
+    }
+
+    /// T2-1, two members (or one's own account with two devices): Ana (0, senior) removes Xavi; Xavi removes Ana and
+    /// adds a helper that builds on Xavi's removal. pinned: the helper is no third member.
+    #[test]
+    fn removed_device_helper_two_members() {
+        let (ds, ge) = setup(2);
+        let mut a = ge.clone();
+        let rm = a.create_remove(&ds[0], ds[1].id(), BTreeMap::new()).unwrap();
+        a.insert(rm).unwrap();
+        let (helper, recs) = helper_attack(&ge, &ds[1], &[ds[0].id()]);
+        for r in recs {
+            let _ = a.insert(r);
+        }
+        assert!(a.is_current_member(&ds[0].id()));
+        assert!(!a.is_current_member(&ds[1].id()) && !a.is_current_member(&helper.id()));
+    }
+
+    /// T2-1, "the confirmer is kept in": X9 removes nobody, only builds on Xavi's removal of Ana. Berta (1), who
+    /// confirmed Ana's removal of Xavi, stays a member, and Ana wins.
+    #[test]
+    fn removed_device_helper_cannot_keep_the_confirmer_next_to_it() {
+        let (ds, ge) = setup(3);
+        let mut a = ge.clone();
+        let rm = a.create_remove(&ds[0], ds[2].id(), BTreeMap::new()).unwrap();
+        a.insert(rm).unwrap();
+        let ack = a.create_rotate(&ds[1]).unwrap();
+        a.insert(ack).unwrap();
+        let (helper, recs) = helper_attack(&ge, &ds[2], &[ds[0].id()]);
+        for r in recs {
+            let _ = a.insert(r);
+        }
+        assert!(a.is_current_member(&ds[0].id()) && a.is_current_member(&ds[1].id()));
+        assert!(!a.is_current_member(&ds[2].id()) && !a.is_current_member(&helper.id()));
+        assert_eq!(a.heads().len(), 1);
+    }
+    /// Second-pass T2-2: a key change dated 100 years ahead is "now" on this device (its arrival), not the newest
+    /// record for good, and the most recent epochs are picked by their place in the graph. pinned: arrival clamp.
+    #[test]
+    fn a_record_dated_in_the_future_is_cut_back_to_its_arrival() {
+        let (ds, mut ge) = setup(2);
+        let head = ge.head().unwrap();
+        let rec = ge.records[&head].clone();
+        let far = now_ms() + 100 * 365 * 24 * 3600 * 1000;
+        let rot = build_at(&ds[1], rec.body.group, vec![head], EpochKind::Rotate, rec.body.recipients.clone(), rec.body.removed.clone(), far);
+        let id = rot.id();
+        ge.insert(rot).unwrap();
+        assert!(ge.time_of(&id).unwrap() <= now_ms(), "cut back to its arrival");
+        assert_eq!(ge.depth(&id), Some(ge.depth(&head).unwrap() + 1));
+    }
     /// S1: a device that is not a member can't be "removed" ahead of time.
     #[test]
     fn removing_a_non_member_refused() {

@@ -1,12 +1,11 @@
-//! Soft size limits (D4): split large payloads into pieces instead of rejecting them,
-//! throttle heavy authors instead of refusing them, and only hard-stop at absurd sizes.
+//! Soft size limits (D4): split large payloads into pieces instead of rejecting them, and only
+//! hard-stop at absurd sizes. (A per-author throttle lived here unused; removed in the second safety pass, T2-14.)
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::DeviceId;
 use crate::{Error, Result};
 
 /// Size of one transport piece. Chosen to fit Nostr's ~47 KiB payload budget per event
@@ -93,33 +92,6 @@ impl Reassembler {
     }
 }
 
-/// Per-author token bucket: heavy authors are slowed, never rejected (D4).
-pub struct Throttle {
-    rate_bytes_per_sec: f64,
-    burst_bytes: f64,
-    buckets: HashMap<DeviceId, (f64, Instant)>,
-}
-
-impl Throttle {
-    pub fn new(rate_bytes_per_sec: f64, burst_bytes: f64) -> Self {
-        Throttle { rate_bytes_per_sec, burst_bytes, buckets: HashMap::new() }
-    }
-
-    /// How long to delay processing `bytes` from `author`. Zero means "process now".
-    pub fn delay_for(&mut self, author: DeviceId, bytes: usize, now: Instant) -> Duration {
-        let (tokens, last) = self.buckets.entry(author).or_insert((self.burst_bytes, now));
-        let elapsed = now.duration_since(*last).as_secs_f64();
-        *tokens = (*tokens + elapsed * self.rate_bytes_per_sec).min(self.burst_bytes);
-        *last = now;
-        *tokens -= bytes as f64;
-        if *tokens >= 0.0 {
-            Duration::ZERO
-        } else {
-            Duration::from_secs_f64(-*tokens / self.rate_bytes_per_sec)
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,17 +126,5 @@ mod tests {
     #[test]
     fn absurd_size_refused() {
         assert!(split(&vec![0u8; ABSURD_SIZE + 1]).is_err());
-    }
-
-    #[test]
-    fn throttle_slows_heavy_author_only() {
-        let mut t = Throttle::new(1000.0, 1000.0);
-        let now = Instant::now();
-        let heavy = DeviceId::random();
-        let light = DeviceId::random();
-        assert_eq!(t.delay_for(heavy, 500, now), Duration::ZERO);
-        let d = t.delay_for(heavy, 1500, now);
-        assert!(d >= Duration::from_millis(900));
-        assert_eq!(t.delay_for(light, 100, now), Duration::ZERO);
     }
 }

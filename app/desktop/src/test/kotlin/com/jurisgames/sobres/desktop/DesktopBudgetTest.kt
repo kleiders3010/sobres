@@ -3,6 +3,8 @@ package com.jurisgames.sobres.desktop
 import androidx.compose.ui.graphics.toAwtImage
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
@@ -11,6 +13,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
@@ -107,15 +110,17 @@ class DesktopBudgetTest {
         shot("1-first")
 
         // Fill: "Monthly amount" fills every envelope by its monthly share; Left in Available follows.
+        // U-S12: the starter envelopes have no made-up amounts, so they are filled by hand here.
+        check(b.envelopes.all { it.amount == 0L }) { b.envelopes.toString() }
         rule.onNodeWithTag("fillOpen").performClick()
         waitFor("fillMonthly")
-        rule.onNodeWithTag("fillMonthly").performClick()
+        for (e in b.envelopes) rule.onNodeWithTag("fill-" + e.name).performTextInput("100")
         shot("2-fill")
         rule.onNodeWithTag("fillSave").performClick()
         gone("fillSave")
         b = n.budget(list.id, today())
-        val need = b.envelopes.sumOf { it.monthlyShare }
-        check(b.envelopes.all { it.balance == it.monthlyShare }) { b.envelopes.toString() }
+        val need = 10_000L * b.envelopes.size
+        check(b.envelopes.all { it.balance == 10_000L }) { b.envelopes.toString() }
         check(b.available == 100_000L - need) { "${b.available} vs ${100_000L - need}" }
         check(!shown("fillHint"))
 
@@ -123,7 +128,9 @@ class DesktopBudgetTest {
         val groceries = b.envelopes.first()
         rule.onNodeWithTag("addSpent").performClick()
         waitFor("amount")
-        rule.onNodeWithTag("addSave").assertIsNotEnabled()
+        // U-S4: Save says what is missing instead of staying grey.
+        rule.onNodeWithTag("addSave").performClick()
+        waitFor("addMissing")
         rule.onNodeWithTag("amount").performTextInput("12.50")
         rule.onNodeWithTag("payee").performTextInput("Market")
         rule.onNodeWithTag("envChip-" + groceries.name).performClick()
@@ -150,7 +157,9 @@ class DesktopBudgetTest {
         rule.onNodeWithTag("payee").performTextInput("Market")
         rule.onNodeWithTag("split").performClick()
         rule.onNodeWithTag("splitAmt-" + groceries.name).performTextInput("20")
-        rule.onNodeWithTag("addSave").assertIsNotEnabled()
+        rule.onNodeWithTag("addSave").performClick()
+        waitFor("addMissing")
+        check(n.budgetActivity(list.id).none { it.kind == "exp" }) { "nothing saved while the split doesn't add up" }
         rule.onNodeWithTag("splitAmt-" + other.name).performTextInput("10")
         rule.onNodeWithTag("addSave").performClick()
         gone("addSave")
@@ -245,11 +254,11 @@ class DesktopBudgetTest {
         try {
             val n = node()
             rule.setContent { SobresApp(n) }
-            // pinned: UI-SPEC "Words" (Sobre, Disponible, Llenar) and the first-launch names
+            // pinned: UI-SPEC "Words" (Sobre, Sin repartir (U-S3), Llenar) and the first-launch names
             rule.waitUntil(5_000) { rule.onAllNodes(hasTestTag("title") and hasText("Mi presupuesto"), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
             rule.onNodeWithTag("firstStart").performClick()
             waitFor("available")
-            check(rule.onAllNodes(hasText("Disponible"), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty())
+            check(rule.onAllNodes(hasText("Sin repartir"), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty())
             check(rule.onAllNodes(hasText("Llenar"), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty())
             check(n.budget(n.lists().single().id, today()).accounts.single().name == "Banco")
         } finally {
@@ -279,9 +288,25 @@ class DesktopBudgetTest {
         rule.onNodeWithTag("amount").performTextInput("900")
         rule.onNodeWithTag("payee").performTextInput("Rent")
         rule.onNodeWithTag("envChip-Rent").performClick()
+        // U-S6: the start date comes from the calendar: two months back, the 1st.
         rule.onNodeWithTag("datePick").performClick()
-        waitFor("dateText")
-        rule.onNodeWithTag("dateText").performTextReplacement(java.time.LocalDate.now().minusMonths(2).toString())
+        waitFor("datePicker")
+        // the picker's own words follow the computer's language, not the app's ("Cambiar al mes anterior" on a Spanish PC)
+        val previous = androidx.compose.ui.test.hasContentDescription("Change to previous month", substring = true) or
+            androidx.compose.ui.test.hasContentDescription("mes anterior", substring = true)
+        repeat(2) { rule.onNode(previous, useUnmergedTree = true).performClick(); rule.waitForIdle() }
+        // a day is one button named with its whole date in the computer's language ("martes, 1 de septiembre de 2026"):
+        // the clickable node inside the picker whose words hold a lone 1
+        val dayOne = androidx.compose.ui.test.SemanticsMatcher("day 1 of the shown month") { node ->
+            val c = node.config
+            val words = c.getOrElse(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription) { emptyList() } +
+                c.getOrElse(androidx.compose.ui.semantics.SemanticsProperties.Text) { emptyList() }.map { it.text }
+            c.contains(androidx.compose.ui.semantics.SemanticsActions.OnClick) &&
+                words.any { Regex("""(^|\D)1(\D|$)""").containsMatchIn(it) }
+        } and androidx.compose.ui.test.hasAnyAncestor(hasTestTag("datePicker"))
+        rule.onAllNodes(dayOne).onFirst().performClick()
+        rule.onNodeWithTag("datePickOk").performClick()
+        gone("datePickOk")
         rule.onNodeWithTag("every-m").performClick()
         shot("7-repeat")
         rule.onNodeWithTag("addSave").performClick()
@@ -307,7 +332,7 @@ class DesktopBudgetTest {
         // Stop repeating: it leaves the list; what it posted stays.
         rule.onNodeWithTag("rep-Rent").performClick()
         waitFor("repStop")
-        rule.onNodeWithTag("repStop").performClick()
+        rule.onNodeWithTag("repStop").performScrollTo().performClick()
         gone("repStop")
         check(n.repeating(list.id).none { it.id == r.id })
         check(n.budgetActivity(list.id).count { it.payee == "Rent" } == 3)

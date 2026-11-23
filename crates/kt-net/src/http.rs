@@ -43,4 +43,27 @@ mod tests {
     fn builds_without_platform_setup() {
         assert!(super::client(std::time::Duration::from_secs(5)).is_some());
     }
+
+    /// First-pass T15b, second-pass T2-8: an answer from someone else's server is read through `bytes_capped`, never
+    /// whole. pinned: no whole-body read (reqwest's bytes, awaited) anywhere in crates/.
+    #[test]
+    fn no_uncapped_body_reads_in_the_crates() {
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf();
+        let needle = [".bytes()", ".await"].concat();
+        let mut found = vec![];
+        let mut dirs = vec![crates];
+        while let Some(d) = dirs.pop() {
+            for e in std::fs::read_dir(&d).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    if p.file_name().is_some_and(|n| n != "target") {
+                        dirs.push(p);
+                    }
+                } else if p.extension().is_some_and(|x| x == "rs") && std::fs::read_to_string(&p).unwrap_or_default().contains(&needle) {
+                    found.push(p.display().to_string());
+                }
+            }
+        }
+        assert!(found.is_empty(), "uncapped body reads: {found:?}");
+    }
 }

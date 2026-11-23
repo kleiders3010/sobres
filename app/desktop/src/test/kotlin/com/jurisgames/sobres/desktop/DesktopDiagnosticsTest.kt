@@ -6,6 +6,7 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import com.jurisgames.sobres.core.KtNode
 import com.jurisgames.sobres.core.NodeOptions
 import com.jurisgames.sobres.core.Platform
@@ -33,6 +34,7 @@ class DesktopDiagnosticsTest {
         rule.setContent { SobresApp(n) }
         rule.onNodeWithTag("settingsOpen").performClick()
         rule.waitUntil(5_000) { shown("version") }
+        rule.onNodeWithTag("version").performScrollTo() // the settings scroll: a tap off-screen would close the dialog
         repeat(6) { rule.onNodeWithTag("version").performClick() }
         check(!shown("diagnostics")) { "hidden until the seventh tap" }
         rule.onNodeWithTag("version").performClick()

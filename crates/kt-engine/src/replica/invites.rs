@@ -103,7 +103,45 @@ impl Replica {
         std::fs::read(self.invites_path(g)).ok().and_then(|b| postcard::from_bytes(&b).ok()).unwrap_or_default()
     }
 
+    fn known_removals_path(&self, g: &GroupId) -> std::path::PathBuf {
+        self.layout.group_dir(g).join("invite_known_removals")
+    }
+
+    /// Per invite: the removals this device already knew when it first saw the invite (second-pass audit T2-9). A
+    /// removal learnt later closes the invite whatever the two devices' clocks say (rule 51). Local only: no wire change.
+    fn known_removals(&self, g: &GroupId) -> std::collections::BTreeMap<[u8; 32], Vec<EpochId>> {
+        std::fs::read(self.known_removals_path(g)).ok().and_then(|b| postcard::from_bytes(&b).ok()).unwrap_or_default()
+    }
+
+    fn removal_ids(&self, g: &GroupId) -> Vec<EpochId> {
+        self.groups.get(g).map(|state| {
+            state.epochs.all_records().filter(|r| state.epochs.is_valid(&r.id()) && matches!(r.body.kind, EpochKind::Remove { .. })).map(|r| r.id()).collect()
+        }).unwrap_or_default()
+    }
+
+    /// Remember what removals were known when these invites were first seen (only for invites not noted yet).
+    fn note_known_removals(&self, g: &GroupId, invites: &[OpenInvite]) {
+        let mut all = self.known_removals(g);
+        let now = self.removal_ids(g);
+        let mut changed = false;
+        for inv in invites {
+            if let std::collections::btree_map::Entry::Vacant(e) = all.entry(inv.id()) {
+                e.insert(now.clone());
+                changed = true;
+            }
+        }
+        let live: std::collections::BTreeSet<[u8; 32]> = invites.iter().map(|i| i.id()).collect();
+        let before = all.len();
+        all.retain(|id, _| live.contains(id));
+        if changed || all.len() != before {
+            if let Ok(b) = postcard::to_stdvec(&all) {
+                let _ = crate::storage::write_atomic(&self.known_removals_path(g), &b);
+            }
+        }
+    }
+
     fn save_invites(&self, g: &GroupId, v: &[OpenInvite]) -> Result<()> {
+        self.note_known_removals(g, v);
         crate::storage::write_atomic(&self.invites_path(g), &postcard::to_stdvec(v).map_err(|e| Error::Encoding(e.to_string()))?)
     }
 
@@ -118,10 +156,14 @@ impl Replica {
         if !state.epochs.is_current_member(&inv.creator) {
             return false;
         }
-        // A removal after the invite was made closes it. Periodic rotations and additions
-        // don't: invites expire within the rotation period anyway.
+        // A removal after the invite closes it. "After" is first by position: a removal this device learnt after it
+        // learnt the invite (T2-9: another device's fast clock must not keep it open); the written times only add to
+        // that. Periodic rotations and additions don't close it: invites expire within the rotation period anyway.
+        let known = self.known_removals(&inv.group).get(&inv.id()).cloned();
         !state.epochs.all_records().any(|r| {
-            state.epochs.is_valid(&r.id()) && r.body.created_ms > inv.created_ms && matches!(r.body.kind, EpochKind::Remove { .. })
+            state.epochs.is_valid(&r.id())
+                && matches!(r.body.kind, EpochKind::Remove { .. })
+                && (r.body.created_ms > inv.created_ms || known.as_ref().is_some_and(|k| !k.contains(&r.id())))
         })
     }
 
@@ -357,6 +399,9 @@ impl Replica {
         }
         // Format 2 (T10): only the door; the request and the answer live under it, and the group is read once
         // a member has let us in. Format 1 (an older app's record, or a backup's own rejoin): the key itself.
+        // Until when (T2-14e, decided 2026-11-22): format 1 from another device ends by itself: no app since
+        // Tasks 1.0.11 / Sobres 1.0.3 / Ciclo 1.0 writes it for an invite, and an invite lives at most 30 days
+        // (`MAX_INVITE_MS`). A backup's own rejoin keeps format 1 for good: whoever holds the backup holds the key.
         let epoch = match (rec.door, rec.epoch_key) {
             (Some(door), _) => {
                 self.add_join_anchor(rec.group, rec.epoch);

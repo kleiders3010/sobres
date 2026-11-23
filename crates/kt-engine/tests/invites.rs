@@ -353,3 +353,27 @@ fn invites_live_at_most_30_days() {
     assert!(expires <= now + MONTH + 1000);
 }
 
+/// Second-pass audit T2-9: an invite made on a phone whose clock runs fast must still close when a member is
+/// removed after it. pinned: "after" is by what this device learnt first, never only by two devices' clocks (rule 51).
+#[test]
+fn a_removal_closes_an_invite_from_a_fast_clock() {
+    let mut net = Net::default();
+    let (mut a, mut b, mut x) = (dev("fa"), dev("fb"), dev("fx"));
+    let g = a.create_group().unwrap();
+    for other in [&mut b, &mut x] {
+        a.add_member(&g, other.device_public()).unwrap();
+        other.accept_group(g);
+        for m in a.export_group(&g).unwrap() {
+            let _ = other.receive(&m);
+        }
+    }
+    net.sync(&mut [&mut a, &mut b, &mut x]);
+    let (code, _) = b.create_invite(&g, CodeKind::Invite, MONTH).unwrap();
+    net.sync(&mut [&mut a, &mut b, &mut x]);
+    let mut inv = a.invites(&g).into_iter().find(|i| i.id() == code.id()).expect("a learnt the invite");
+    // b's clock five minutes fast: the invite says it was made after the removal that follows.
+    inv.created_ms += 5 * 60_000;
+    assert!(a.invite_is_open(&inv), "open before anyone is removed");
+    a.remove_member(&g, x.device_id()).unwrap();
+    assert!(!a.invite_is_open(&inv), "a removal learnt after the invite closes it, whatever its time says");
+}

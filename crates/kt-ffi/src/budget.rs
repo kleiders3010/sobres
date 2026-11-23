@@ -121,7 +121,7 @@ pub struct RepeatItem {
 /// One quoted CSV field. Control characters go; a field that, after leading spaces, starts with = + - @ would
 /// start a formula in a spreadsheet and gets a leading ' (round 5, S9: texts come from every member).
 fn csv_cell(s: &str) -> String {
-    let clean: String = s.chars().filter(|c| !c.is_control()).collect();
+    let clean: String = s.chars().filter(|c| !c.is_control() && !kt_tasks::is_invisible(*c)).collect();
     let lead = clean.trim_start();
     let s = if lead.starts_with(['=', '+', '-', '@']) && lead.parse::<f64>().is_err() { format!("'{clean}") } else { clean };
     format!("\"{}\"", s.replace('"', "\"\""))
@@ -138,6 +138,11 @@ mod csv_tests {
             assert!(!c.chars().any(char::is_control));
         }
         assert_eq!(super::csv_cell("-12.50"), "\"-12.50\"", "amounts stay numbers");
+        // pinned: QR Q2-7, an invisible character can't hide a formula start
+        for bad in ["\u{FEFF}=cmd", "\u{200B}+1+1", "\u{202E}@x"] {
+            let c = super::csv_cell(bad);
+            assert!(c.starts_with("\"'") && !c.chars().any(kt_tasks::is_invisible), "{bad:?} -> {c}");
+        }
         assert_eq!(super::csv_cell("Rent \"May\""), "\"Rent \"\"May\"\"\"");
     }
 }
@@ -237,11 +242,19 @@ impl KtNode {
 
     pub fn budget_activity(&self, list_id: String) -> Result<Vec<TxItem>, KtError> {
         let l = self.list(&list_id)?;
-        let who: Who = self
-            .app
-            .people(&l)
-            .into_iter()
-            .flat_map(|p| p.devices.iter().map(|d| (kt_engine::ids::peer_id_for(d), p.name.clone())).collect::<Vec<_>>())
+        // A name two people share carries the short tag, as in "Shared with" (S3-4: same name, not the same person).
+        let people = self.app.people(&l);
+        let label = |p: &kt_tasks::app::Person| {
+            if people.iter().filter(|o| o.name == p.name).count() > 1 {
+                let key = p.devices.iter().min().map(|d| d.0).unwrap_or_default();
+                format!("{} \u{b7} {}", p.name, kt_tasks::appearance::avatar(&key).1)
+            } else {
+                p.name.clone()
+            }
+        };
+        let who: Who = people
+            .iter()
+            .flat_map(|p| p.devices.iter().map(|d| (kt_engine::ids::peer_id_for(d), label(p))).collect::<Vec<_>>())
             .collect();
         self.app
             .read_authored(&l, |d, authors| {

@@ -33,7 +33,7 @@ mod notify;
 mod undo;
 pub use undo::Person;
 pub use notify::{Change, ChangeKind, STALE_MS};
-pub use linking::{AccountChanges, DeviceInfo, RecentLink, LINK_CODE_MS, RECENT_LINK_MS};
+pub use linking::{AccountChanges, DeviceInfo, RecentJoin, RecentLink, LINK_CODE_MS, RECENT_LINK_MS};
 
 #[derive(Serialize, Deserialize, Clone, Copy)]
 struct AppMeta {

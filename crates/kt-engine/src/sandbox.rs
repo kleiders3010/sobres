@@ -105,6 +105,12 @@ fn parse_worker_output(out: &str) -> Verdict {
 /// Entry point for the worker process. The host binary calls this when started with
 /// `--kt-import-worker`. Reads `[u32 snapshot len][snapshot][update]` from stdin.
 pub fn worker_main() -> ! {
+    worker_main_with(|_| {})
+}
+
+/// [`worker_main`] that also runs the app's own reader on the merged document (second-pass audit T2-3): input that
+/// crashes the app's reader then crashes here, in the throwaway process, and is quarantined, not in the app.
+pub fn worker_main_with(read: fn(&LoroDoc)) -> ! {
     let mut buf = Vec::new();
     if std::io::stdin().read_to_end(&mut buf).is_err() || buf.len() < 4 {
         print!("ERR bad input");
@@ -132,6 +138,7 @@ pub fn worker_main() -> ! {
             // Force materialization: some Loro bugs only panic on first read (#1088).
             let _ = doc.get_deep_value();
             let _ = doc.export(ExportMode::Snapshot);
+            read(&doc);
             // Peers whose ops the update contains: applied now or parked as pending
             // (waiting for dependencies). Both must be the sender's own PeerID.
             let mut items: Vec<String> = status.success.iter().map(|(p, (a, b))| format!("{p}:{a}-{b}")).collect();

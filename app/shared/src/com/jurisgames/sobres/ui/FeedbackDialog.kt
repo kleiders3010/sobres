@@ -22,6 +22,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.jurisgames.sobres.core.KtNode
@@ -103,11 +104,12 @@ object Feedback {
     }
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun FeedbackDialog(node: KtNode, onSent: () -> Unit, onClose: () -> Unit) {
     var kind by remember { mutableStateOf("bug") }
-    var message by remember { mutableStateOf("") }
-    var email by remember { mutableStateOf("") }
+    var message by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf("") }
+    var email by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf("") }
     var include by remember { mutableStateOf(true) }
     var preview by remember { mutableStateOf(false) }
     var sending by remember { mutableStateOf(false) }
@@ -118,6 +120,8 @@ fun FeedbackDialog(node: KtNode, onSent: () -> Unit, onClose: () -> Unit) {
     val scope = rememberCoroutineScope()
     AlertDialog(
         onDismissRequest = onClose,
+        // a tap outside closes it only while nothing is written (QR review U-Q22: it threw a message away)
+        properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = message.isBlank()),
         confirmButton = {
             TextButton(enabled = !sending, modifier = Modifier.testTag("feedbackSend"), onClick = {
                 if (message.isBlank()) {
@@ -138,7 +142,7 @@ fun FeedbackDialog(node: KtNode, onSent: () -> Unit, onClose: () -> Unit) {
         text = {
             Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(tr("It goes to the person who makes this app. Thanks for helping!"), style = MaterialTheme.typography.bodySmall)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     for ((k, label) in Feedback.kinds) {
                         FilterChip(selected = kind == k, onClick = { kind = k }, label = { Text(tr(label)) }, modifier = Modifier.testTag("feedbackKind-$k"))
                     }
@@ -147,8 +151,10 @@ fun FeedbackDialog(node: KtNode, onSent: () -> Unit, onClose: () -> Unit) {
                     minLines = 4, modifier = Modifier.fillMaxWidth().testTag("feedbackMessage"))
                 OutlinedTextField(email, { email = it.take(254) }, placeholder = { Text(tr("Your email, if you'd like an answer (optional)")) },
                     singleLine = true, modifier = Modifier.fillMaxWidth().testTag("feedbackEmail"))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(include, { include = it }, modifier = Modifier.testTag("feedbackDetails"))
+                // the whole row, words included, is the tick (Ciclo review U-C14, general)
+                Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).toggleable(include, role = androidx.compose.ui.semantics.Role.Checkbox) { include = it }.testTag("feedbackDetails"),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(include, null)
                     Text(tr("Include technical details"))
                 }
                 Text(tr("Sync state, relays, storage sizes, app version and system. Never your budget, entries or names."), style = MaterialTheme.typography.bodySmall)

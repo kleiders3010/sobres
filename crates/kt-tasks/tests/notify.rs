@@ -108,3 +108,45 @@ fn every_join_notifies_the_group() {
     assert!(sam.take_changes().unwrap().is_empty(), "once");
     assert!(kim.take_changes().unwrap().is_empty(), "not about joining yourself");
 }
+
+
+// pinned: U-S2, a partner's expense or income becomes a notification ("Sam: 40.00 Groceries"), never our own.
+#[test]
+fn others_budget_entries_become_notifications() {
+    use kt_tasks::budget as b;
+    let mut mb = Mailbox::default();
+    let (alex, sam) = (open("alexb"), open("samb"));
+    alex.set_display_name("Alex").unwrap();
+    sam.set_display_name("Sam").unwrap();
+    let fam = alex.create_group("Family").unwrap();
+    let list = alex.create_list(Some(fam.group), "Casa").unwrap();
+    let (acct, env) = alex
+        .edit(&list, |d| {
+            b::set_currency(d, "$")?;
+            let a = b::set_account(d, None, "Bank", "bank", 100_000)?;
+            let e = b::set_envelope(d, None, "Groceries", 0, "m", None, "")?;
+            Ok((a, e))
+        })
+        .unwrap();
+    let old = b::TxInput { kind: "exp".into(), date: "2026-11-20".into(), amount: 500, account: acct.clone(), payee: "Old".into(), parts: vec![(env.clone(), 500)], ..Default::default() };
+    alex.edit(&list, |d| b::set_tx(d, None, &old, "Alex", kt_engine::replica::now_ms()).map(|_| ()).map_err(Into::into)).unwrap();
+    let bundle = alex.share_group_with_device(fam.group, sam.with(|r| r.identity().public())).unwrap();
+    sam.join_from_bundle(fam.group, &bundle).unwrap();
+    mb.sync(&[&alex, &sam]);
+    assert!(alex.take_changes().unwrap().is_empty(), "a first look reports nothing");
+    assert!(sam.take_changes().unwrap().is_empty(), "entries made before joining aren't news");
+
+    let l = sam.find_list("Casa").unwrap();
+    let spent = b::TxInput { kind: "exp".into(), date: "2026-11-22".into(), amount: 4000, account: acct.clone(), payee: "Super".into(), parts: vec![(env.clone(), 4000)], ..Default::default() };
+    sam.edit(&l, |d| b::set_tx(d, None, &spent, "Sam", kt_engine::replica::now_ms()).map(|_| ()).map_err(Into::into)).unwrap();
+    let mine = b::TxInput { payee: "Mine".into(), ..spent.clone() };
+    alex.edit(&list, |d| b::set_tx(d, None, &mine, "Alex", kt_engine::replica::now_ms()).map(|_| ()).map_err(Into::into)).unwrap();
+    mb.sync(&[&alex, &sam]);
+
+    let got = alex.take_changes().unwrap();
+    assert_eq!(got.len(), 1, "{got:?}");
+    let c = &got[0];
+    assert_eq!((c.who.as_str(), c.kind, c.title.as_str(), c.cents, c.currency.as_str()), ("Sam", ChangeKind::Entered, "Super", 4000, "$"));
+    assert_eq!(c.list.as_ref().unwrap().name, "Casa");
+    assert!(alex.take_changes().unwrap().is_empty(), "nothing twice");
+}

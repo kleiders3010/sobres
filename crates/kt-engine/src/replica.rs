@@ -302,6 +302,8 @@ impl Replica {
                     let _ = state.epochs.insert(r);
                 }
             }
+            let kept: Vec<(EpochId, u64)> = std::fs::read(self.layout.group_dir(&g).join("arrived")).ok().and_then(|b| postcard::from_bytes(&b).ok()).unwrap_or_default();
+            state.epochs.restore_arrivals(&kept);
             self.groups.insert(g, state);
             // Keys received through invites (before being added).
             for (e, k) in anchors {
@@ -546,6 +548,10 @@ impl Replica {
             return Ok(());
         }
         storage::append_record(&self.layout.control_log(&g), &bytes)?;
+        // Arrival times survive a restart (S3-8): a record dated ahead stays cut back to when it first came.
+        if let Ok(b) = postcard::to_allocvec(&state.epochs.arrivals()) {
+            let _ = storage::write_atomic(&self.layout.group_dir(&g).join("arrived"), &b);
+        }
         if own {
             state.new_records.push(rec.clone());
         }
@@ -739,6 +745,12 @@ impl Replica {
             }
         };
         if inner.kind == MessageKind::DocEpochProposal {
+            // Second-pass audit T2-5 (rule 33): a rebuild is accepted only from a device that is a member now. Being a
+            // recipient of the envelope's (older) epoch is not enough: a removed device still holds those keys.
+            if !self.groups[&g].epochs.is_current_member(&env.sender) {
+                self.events.push(Event::Rejected { reason: "document epoch proposal from a device that is not a member".into() });
+                return Err(Error::Rejected("proposal from a non-member".into()));
+            }
             return self.handle_proposal(g, env.sender, inner, bytes, persist);
         }
         self.ensure_doc(&g, &inner.doc)?;

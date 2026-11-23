@@ -238,3 +238,45 @@ fn a_long_absent_member_doesnt_block_compaction_and_rebases_on_return() {
     assert_eq!(t, titles(&c, &g, &d));
     assert!(t.contains(&"offline edit by C".to_string()), "{t:?}");
 }
+
+/// Second-pass audit T2-5: a removed device that still holds the old epoch's key seals a rebuild ("document epoch
+/// proposal") of the list as it last saw it. pinned: members refuse a rebuild from a device that is not a member now.
+#[test]
+fn a_removed_device_cannot_make_members_rebuild_a_list() {
+    let (mut a, mut b, mut c) = (dev("ra"), dev("rb"), dev("rc"));
+    let g = a.create_group().unwrap();
+    let d = a.create_doc(&g).unwrap();
+    tk::init_list(a.doc(&g, &d).unwrap(), "L").unwrap();
+    tk::add_task(a.doc(&g, &d).unwrap(), None, "milk").unwrap();
+    a.commit(&g, &d).unwrap();
+    for other in [&mut b, &mut c] {
+        a.add_member(&g, other.device_public()).unwrap();
+        other.accept_group(g);
+        for m in a.export_group(&g).unwrap() {
+            let _ = other.receive(&m);
+        }
+    }
+    let _ = a.outbox();
+    let _ = c.outbox();
+    // A removes C; B hears of it, C does not.
+    a.remove_member(&g, c.device_id()).unwrap();
+    for m in a.export_group(&g).unwrap() {
+        let _ = b.receive(&m);
+    }
+    tk::add_task(a.doc(&g, &d).unwrap(), None, "bread").unwrap();
+    a.commit(&g, &d).unwrap();
+    for m in a.outbox().unwrap() {
+        let _ = b.receive(&m);
+    }
+    assert!(!b.members(&g).contains(&c.device_id()), "B knows C is out");
+    // C, unaware, proposes a rebuild under the old epoch.
+    c.propose_doc_epoch(&g, &d).unwrap();
+    for m in c.outbox().unwrap() {
+        let _ = a.receive(&m);
+        let _ = b.receive(&m);
+    }
+    for r in [&a, &b] {
+        assert_eq!(r.doc_generation(&g, &d), Some(0), "no rebuild from a removed device");
+    }
+    assert_eq!(titles(&a, &g, &d), titles(&b, &g, &d));
+}

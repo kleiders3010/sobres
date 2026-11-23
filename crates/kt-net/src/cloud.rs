@@ -7,7 +7,7 @@
 //!   so deciding at write time would miss exactly the case it's for. The manifest can
 //!   switch it to [`CloudMode::WhenHelpersWeak`] once the helper network is large.
 //! - **Reads are cheap:** "what's newer than revision N" per topic, usually a few bytes.
-//!   Every round while this device's helpers are weak, every [`READ_EVERY`] rounds otherwise.
+//!   Every second round while this device's helpers are weak, every [`READ_EVERY`] rounds otherwise.
 //! - Its own writer key derivation, so the cloud can't link a device's slots to its helper
 //!   writes.
 
@@ -27,7 +27,7 @@ use crate::mailbox::{BoxFut, Capabilities, Mailbox, SlotRead, SlotWrite, WriteOu
 pub const DEFAULT_URL: &str = "https://mailbox.jurisgames.com";
 pub const MAX_SLOT: usize = 640 * 1024;
 /// Reads when helpers are healthy: one round in this many.
-pub const READ_EVERY: u64 = 4;
+pub const READ_EVERY: u64 = 8; // second-pass audit T2-6: was 4 (normal use reached the free day at a few hundred devices)
 /// "Helpers are weak": fewer healthy helpers than this for a topic.
 pub const WEAK_BELOW: usize = 2;
 
@@ -161,9 +161,10 @@ impl CloudMailbox {
 
     async fn put(&self, topic: &[u8; 32], key: &SecretKey, version: u64, blob: &[u8]) -> WriteOutcome {
         let writer = *key.public().as_bytes();
-        let sig = key.sign(&put_message(topic, version, blob)).to_bytes();
+        let mut version = version;
+        let mut sig = key.sign(&put_message(topic, version, blob)).to_bytes();
         let mut nonce = 0u64;
-        for _ in 0..2 {
+        for _ in 0..3 {
             let mut body = Vec::with_capacity(112 + blob.len());
             body.extend_from_slice(&writer);
             body.extend_from_slice(&version.to_le_bytes());
@@ -190,6 +191,18 @@ impl CloudMailbox {
                         Ok(n) => n,
                         Err(_) => return WriteOutcome::Unavailable,
                     };
+                }
+                // Second-pass audit T2-10: the mailbox holds a higher version (this device's clock went back):
+                // write once more above it instead of taking "stale" as stored.
+                409 => {
+                    let stored: Option<u64> = r.headers().get("x-version").and_then(|v| v.to_str().ok()?.parse().ok());
+                    match stored {
+                        Some(s) if s >= version && s < u64::MAX / 2 => {
+                            version = s + 1;
+                            sig = key.sign(&put_message(topic, version, blob)).to_bytes();
+                        }
+                        _ => return WriteOutcome::Unavailable,
+                    }
                 }
                 413 => return WriteOutcome::Refused("slot too large for the cloud mailbox".into()),
                 // Topic full, daily budget used up, overloaded: later.
@@ -237,7 +250,7 @@ impl Mailbox for CloudMailbox {
             } else {
                 topics
                     .iter()
-                    .filter(|t| self.helpers_weak(t) || round % READ_EVERY == 0 || !self.cache.lock().expect("lock").contains_key(*t))
+                    .filter(|t| (self.helpers_weak(t) && round % 2 == 0) || round % READ_EVERY == 0 || !self.cache.lock().expect("lock").contains_key(*t))
                     .copied()
                     .collect() // (helpers carry the rest; the cloud is checked every few rounds)
             };
@@ -246,20 +259,27 @@ impl Mailbox for CloudMailbox {
                 let after = self.cache.lock().expect("lock").get(t).map(|c| c.0).unwrap_or(0);
                 let r = self.client.get(format!("{}?after={after}", self.url(t))).timeout(READ_TIMEOUT).send().await.ok()?;
                 let ok = r.status().is_success();
+                let busy = matches!(r.status().as_u16(), 429 | 503);
                 // A topic holds at most 2 MB of slots plus their headers.
                 let b = crate::http::bytes_capped(r, 3 * 1024 * 1024).await?;
-                Some((*t, ok.then_some(b)))
+                Some((*t, ok.then_some(b), busy))
             }))
             .await;
             if !due.is_empty() {
-                if got.iter().all(|g| g.is_none()) {
+                // Second-pass audit T2-11: "slow down" (or the plan's own limit page) is treated like no answer: the
+                // cloud is left alone for a minute, doubling, instead of being asked again for every topic each round.
+                if got.iter().any(|g| g.as_ref().is_some_and(|x| x.2)) || got.iter().all(|g| g.is_none()) {
                     self.went_down();
                 } else {
                     self.answered();
                 }
             }
-            for (t, b) in got.into_iter().flatten() {
-                let Some(b) = b else { continue };
+            for (t, b, _) in got.into_iter().flatten() {
+                let Some(b) = b else {
+                    // a refused topic is asked every few rounds like the others, not every round (T2-11)
+                    self.cache.lock().expect("lock").entry(t).or_insert((0, HashMap::new()));
+                    continue;
+                };
                 let t = &t;
                 let Some((rev, slots)) = parse_read(*t, &b) else { continue };
                 let mut c = self.cache.lock().expect("lock");

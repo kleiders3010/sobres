@@ -6,6 +6,7 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import com.jurisgames.sobres.core.KtNode
 import com.jurisgames.sobres.core.NodeOptions
@@ -50,7 +51,7 @@ class DesktopFeedbackTest {
         rule.setContent { SobresApp(n) }
         rule.onNodeWithTag("settingsOpen").performClick()
         rule.waitUntil(5_000) { shown("feedbackOpen") }
-        rule.onNodeWithTag("feedbackOpen").performClick()
+        rule.onNodeWithTag("feedbackOpen").performScrollTo().performClick()
         rule.waitUntil(5_000) { shown("feedbackMessage") }
 
         rule.onNodeWithTag("feedbackSend").performClick()
@@ -69,7 +70,7 @@ class DesktopFeedbackTest {
         check(got.size == 1 && got[0] == preview) { "what is sent is exactly what the preview showed" }
         check("Sync \\\"stuck\\\" after\\nwaking up" in got[0]) { "quotes and line breaks are escaped:\n${got[0]}" }
 
-        rule.onNodeWithTag("feedbackOpen").performClick()
+        rule.onNodeWithTag("feedbackOpen").performScrollTo().performClick()
         rule.waitUntil(5_000) { shown("feedbackMessage") }
         rule.onNodeWithTag("feedbackMessage").performTextInput("No details")
         rule.onNodeWithTag("feedbackDetails").performClick()

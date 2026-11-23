@@ -90,7 +90,9 @@ private fun scheme(c: ThemeColors, dark: Boolean): ColorScheme {
  */
 @Composable
 fun AppTheme(node: KtNode, version: Int, dynamicScheme: ((Boolean) -> ColorScheme?)?, content: @Composable () -> Unit) {
-    val dark = isSystemInDarkTheme()
+    val system = isSystemInDarkTheme()
+    val mode = remember(node, version) { darkMode(node.dataDir()) }
+    val dark = when (mode) { DarkMode.System -> system; DarkMode.Light -> false; DarkMode.Dark -> true }
     val settings = remember(node, version) { node.settings() }
     val colors = remember(node, version, dark) { node.themeColors(dark) }
     val cs = (if (settings.dynamicColor == true) dynamicScheme?.invoke(dark) else null) ?: scheme(colors, dark)
@@ -117,14 +119,18 @@ fun ListBadge(l: ListItem, modifier: Modifier = Modifier) {
 @Composable
 fun Avatar(p: PersonItem) {
     val look = LocalLook.current
-    Box(Modifier.size(28.dp).background(argb(accentColor(look.themeId, p.hue, 1u.toUByte(), look.dark)), CircleShape), contentAlignment = Alignment.Center) {
+    // U-S23: the circle grows with the text size, so initials never spill out at large text.
+    val grow = androidx.compose.ui.platform.LocalDensity.current.fontScale.coerceIn(1f, 2f)
+    Box(Modifier.size(28.dp * grow).background(argb(accentColor(look.themeId, p.hue, 1u.toUByte(), look.dark)), CircleShape), contentAlignment = Alignment.Center) {
         Text(p.initials, color = if (look.dark) Color.Black else Color.White, fontSize = 12.sp)
     }
 }
 
 /** A person's name, with the short tag when someone else in the list has the same name. */
 fun personLabel(p: PersonItem, all: List<PersonItem>): String {
-    val base = if (p.isMe) tr("{name} (you)", "name" to p.name) else p.name
+    // U-S11: the engine's fallback name is English.
+    val name = if (p.name.isBlank() || p.name == "Someone") tr("Someone") else p.name
+    val base = if (p.isMe) tr("{name} (you)", "name" to name) else name
     return if (all.count { it.name == p.name } > 1) "$base · ${p.tag}" else base
 }
 
@@ -175,4 +181,16 @@ fun StyleDialog(node: KtNode, list: ListItem, onDone: () -> Unit, onClose: () ->
             }
         },
     )
+}
+
+/** Light or dark: the system's by default, or the person's own pick (cold UX review U-T11). This device only. */
+enum class DarkMode(val key: String, val label: String) { System("system", "Same as the system"), Light("light", "Light"), Dark("dark", "Dark") }
+
+fun darkMode(dataDir: String): DarkMode {
+    val k = runCatching { java.io.File(dataDir, "dark_mode").readText().trim() }.getOrNull()
+    return DarkMode.entries.firstOrNull { it.key == k } ?: DarkMode.System
+}
+
+fun setDarkMode(dataDir: String, m: DarkMode) {
+    runCatching { java.io.File(dataDir, "dark_mode").writeText(m.key) }
 }

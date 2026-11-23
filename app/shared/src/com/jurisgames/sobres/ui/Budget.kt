@@ -1,5 +1,7 @@
 package com.jurisgames.sobres.ui
 
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -22,7 +24,19 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.Role
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -76,7 +90,7 @@ import java.time.format.DateTimeFormatter
 
 /** Cents as the person reads them: "1,250.00", with the budget's symbol in front ("$1,250.00"). */
 fun money(cents: Long, symbol: String = "", sign: Boolean = false): String {
-    val nf = java.text.NumberFormat.getNumberInstance(Lang.locale).apply { minimumFractionDigits = 2; maximumFractionDigits = 2 }
+    val nf = java.text.NumberFormat.getNumberInstance(moneyLocale()).apply { minimumFractionDigits = 2; maximumFractionDigits = 2 }
     val body = symbol + nf.format(kotlin.math.abs(cents) / 100.0)
     return when {
         cents < 0 -> "−$body"
@@ -100,6 +114,36 @@ fun parseCents(text: String): Long? {
     if (w.length > 12) return null
     val c = w.toLong() * 100 + (frac.padEnd(2, '0').toLongOrNull() ?: 0)
     return if (neg) -c else c
+}
+
+/**
+ * Amounts in the person's own marks (U-S8): a Spanish device keeps its country ("1.250,00" in es-AR and es-UY,
+ * "1,250.00" in es-MX); day and month names stay [Lang.locale].
+ */
+fun moneyLocale(): java.util.Locale {
+    val d = java.util.Locale.getDefault()
+    return if (Lang.spanish) (if (d.language == "es") d else Lang.locale) else Lang.locale
+}
+
+/** "0.00" in the person's marks, for an empty amount field. */
+fun zeroAmount(): String = money(0L)
+
+/** U-S6: a date is picked on a calendar in the person's own order, never typed as year-month-day. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PickDateDialog(initial: String, onPicked: (String) -> Unit, onClose: () -> Unit) {
+    val start = runCatching { LocalDate.parse(initial) }.getOrDefault(LocalDate.now())
+    val ds = rememberDatePickerState(initialSelectedDateMillis = start.atStartOfDay().toInstant(java.time.ZoneOffset.UTC).toEpochMilli())
+    DatePickerDialog(
+        onDismissRequest = onClose,
+        confirmButton = {
+            TextButton(onClick = {
+                ds.selectedDateMillis?.let { onPicked(java.time.Instant.ofEpochMilli(it).atZone(java.time.ZoneOffset.UTC).toLocalDate().toString()) }
+                onClose()
+            }, modifier = Modifier.testTag("datePickOk")) { Text(tr("OK")) }
+        },
+        dismissButton = { TextButton(onClick = onClose) { Text(tr("Cancel")) } },
+    ) { DatePicker(ds, modifier = Modifier.testTag("datePicker")) }
 }
 
 /** The amount as it goes back into a field ("12.50", no grouping). */
@@ -151,6 +195,8 @@ fun BudgetPane(
     onMenu: (() -> Unit)?,
     listMenu: ListActions,
     snackbar: SnackbarHostState,
+    /** Ctrl+N / Ctrl+Shift+N on desktop (U-S16): the kind of entry to open the Add sheet for. */
+    keyAdd: androidx.compose.runtime.MutableState<String?>? = null,
     chips: (@Composable () -> Unit)? = null,
 ) {
     val node = env.node
@@ -166,11 +212,18 @@ fun BudgetPane(
     val repeating = remember(node, env.version, list.id) { runCatching { node.repeating(list.id) }.getOrDefault(emptyList()) }
     // Rent, pay, bills: what repeats is posted when its day comes (on any device; the same entry once).
     androidx.compose.runtime.LaunchedEffect(node, list.id, day, env.version) {
-        if (runCatching { node.postDue(list.id, day) }.getOrDefault(emptyList()).isNotEmpty()) env.changed()
+        // Off the main thread (S3-5): a budget with many repeats must not freeze the screen while they are posted.
+        val posted = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { node.postDue(list.id, day) }.getOrDefault(emptyList()) }
+        if (posted.isNotEmpty()) env.changed()
     }
     var section by remember(list.id) { mutableStateOf(Section.Envelopes) }
+    env.backHandler?.invoke(section != Section.Envelopes) { section = Section.Envelopes }
     var menuOpen by remember { mutableStateOf(false) }
-    var add by remember { mutableStateOf<AddRequest?>(null) }
+    // U-S5: an open Add sheet comes back after rotation or Android recreating the app (its fields are saved inside it).
+    var add by rememberSaveable(list.id, stateSaver = Saver<AddRequest?, List<String>>(
+        save = { r -> r?.let { listOf(it.kind, it.edit?.id.orEmpty(), it.envelope.orEmpty(), it.repeat?.id.orEmpty(), it.account.orEmpty()) } },
+        restore = { v -> AddRequest(v[0], activity.find { it.id == v[1] }, v[2].ifEmpty { null }, repeating.find { it.id == v[3] }, v[4].ifEmpty { null }) },
+    )) { mutableStateOf<AddRequest?>(null) }
     var fill by remember { mutableStateOf<Long?>(null) }
     var openEnv by remember { mutableStateOf<String?>(null) }
     var editEnv by remember { mutableStateOf<EnvelopeItem?>(null) }
@@ -179,6 +232,12 @@ fun BudgetPane(
     var newAcct by remember { mutableStateOf(false) }
     var reconcile by remember { mutableStateOf<String?>(null) }
     var currency by remember { mutableStateOf(false) }
+    keyAdd?.value?.let { k -> androidx.compose.runtime.LaunchedEffect(k) { add = AddRequest(k); keyAdd.value = null } }
+
+    /** U-S4: a save the core refused says so, and its dialog stays open. */
+    fun couldNotSave(e: Throwable) {
+        scope.launch { snackbar.showSnackbar(userError(e, tr("Couldn't save. Try again."))) }
+    }
 
     fun undoable(message: String, undo: () -> Unit) {
         snackbar.currentSnackbarData?.dismiss() // the newest change is the one Undo takes back
@@ -207,7 +266,9 @@ fun BudgetPane(
                     item(tr("Rename"), "menuRename", listMenu.rename)
                     item(tr("Color and icon"), "styleOpen", listMenu.style)
                     item(tr("Currency symbol"), "currencyOpen") { currency = true }
-                    env.onExport?.let { ex -> item(tr("Export CSV"), "export") { ex(list) } }
+                    env.onExport?.let { ex -> item(tr("Export for a spreadsheet (CSV)"), "export") { ex(list) } }
+                    // U-S25: rolling back a partner's changes was built but unreachable.
+                    if (shared && people.size > 1) item(tr("Undo someone's changes…"), "menuUndo", listMenu.undo)
                     HorizontalDivider()
                     DropdownMenuItem(
                         text = { Text(tr("Delete budget"), color = MaterialTheme.colorScheme.error) },
@@ -217,16 +278,39 @@ fun BudgetPane(
                 }
             }
         }
+        if (shared && people.size <= 1) {
+            // U-S26: shared, but nobody has joined yet.
+            Row(Modifier.padding(start = if (onMenu != null) 52.dp else 16.dp, end = 8.dp).testTag("waitingJoin"), verticalAlignment = Alignment.CenterVertically) {
+                Text(tr("Invite made. Waiting for someone to join."), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f, fill = false))
+                TextButton(onClick = listMenu.share) { Text(tr("Show invite")) }
+            }
+        }
         if (shared && people.size > 1) {
             Text(
                 tr("Shared with ") + people.filter { !it.isMe }.joinToString { personLabel(it, people) },
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(start = if (onMenu != null) 52.dp else 16.dp, end = 16.dp).testTag("sharedWith"),
             )
+            // Whether the others can have it yet (cold UX review U-T4): read again every 15 s while it is open.
+            val sync by androidx.compose.runtime.produceState<com.jurisgames.sobres.core.GroupSync?>(null, node, list.groupId, env.version) {
+                while (true) {
+                    value = runCatching { node.groupSync(list.groupId) }.getOrNull()
+                    kotlinx.coroutines.delay(15_000)
+                }
+            }
+            sync?.let { s -> syncLine(s, node.firstRoundDone())?.let { (text, warn) ->
+                Text(
+                    text, style = MaterialTheme.typography.bodySmall,
+                    color = if (warn) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(start = if (onMenu != null) 52.dp else 16.dp, end = 16.dp)
+                        .semantics { liveRegion = androidx.compose.ui.semantics.LiveRegionMode.Polite }.testTag("syncLine"),
+                )
+            } }
         }
         val unreadable = remember(node, env.version, list.id) { runCatching { node.budgetUnreadable(list.id) }.getOrDefault(0u) }
         if (unreadable > 0u) Text(
-            tr("{n} entries could not be read (made by a different app) and count nowhere", "n" to unreadable),
+            if (unreadable == 1u) tr("1 entry could not be read (made by a different app) and counts nowhere") else tr("{n} entries could not be read (made by a different app) and count nowhere", "n" to unreadable),
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
             modifier = Modifier.padding(start = if (onMenu != null) 52.dp else 16.dp, end = 16.dp).testTag("unreadable"),
         )
@@ -258,7 +342,7 @@ fun BudgetPane(
             ReconcileDialog(env, list, b, a, activity, onClose = { reconcile = null }, onAdd = { add = AddRequest("exp", account = a.id) }, onDone = { n ->
                 reconcile = null
                 env.changed()
-                scope.launch { snackbar.showSnackbar(tr("Reconciled {name}", "name" to a.name) + if (n > 0) " · " + tr("{n} entries", "n" to n.toString()) else "") }
+                scope.launch { snackbar.showSnackbar(tr("Reconciled {name}", "name" to a.name) + if (n > 0) " · " + (if (n == 1) tr("1 entry") else tr("{n} entries", "n" to n.toString())) else "") }
             })
         } ?: run { reconcile = null }
     }
@@ -288,7 +372,8 @@ fun BudgetPane(
     if (newEnv || editEnv != null) {
         EnvelopeEditDialog(b, editEnv, onClose = { newEnv = false; editEnv = null }) { name, amount, kind, due, group ->
             runCatching { node.setEnvelope(list.id, editEnv?.id, name, amount, kind, due, group) }
-            newEnv = false; editEnv = null
+                .onSuccess { newEnv = false; editEnv = null }
+                .onFailure { couldNotSave(it) }
             env.changed()
         }
     }
@@ -304,7 +389,8 @@ fun BudgetPane(
                 }
             }) { name, kind, start ->
             runCatching { node.setAccount(list.id, editAcct?.id, name, kind, start) }
-            newAcct = false; editAcct = null
+                .onSuccess { newAcct = false; editAcct = null }
+                .onFailure { couldNotSave(it) }
             env.changed()
         }
     }
@@ -312,7 +398,7 @@ fun BudgetPane(
         var sym by remember { mutableStateOf(b.currency) }
         AlertDialog(
             onDismissRequest = { currency = false },
-            confirmButton = { TextButton(onClick = { runCatching { node.setCurrency(list.id, sym) }; currency = false; env.changed() }, modifier = Modifier.testTag("currencyGo")) { Text(tr("Save")) } },
+            confirmButton = { TextButton(onClick = { runCatching { node.setCurrency(list.id, sym) }.onSuccess { currency = false }.onFailure { couldNotSave(it) }; env.changed() }, modifier = Modifier.testTag("currencyGo")) { Text(tr("Save")) } },
             dismissButton = { TextButton(onClick = { currency = false }) { Text(tr("Cancel")) } },
             title = { Text(tr("Currency symbol")) },
             text = { OutlinedTextField(sym, { if (it.length <= 8) sym = it }, singleLine = true, placeholder = { Text("$  €  £  ARS") }, modifier = Modifier.testTag("currencyText")) },
@@ -329,7 +415,8 @@ private fun EnvelopesView(b: BudgetView, accent: Color, onFill: () -> Unit, onOp
         item {
             Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text(tr("Available"), style = MaterialTheme.typography.titleMedium)
+                    // U-S3: "Available" read like "money I have"; this is the money no envelope holds yet.
+                    Text(tr("Not in an envelope yet"), style = MaterialTheme.typography.titleMedium)
                     if (short) Text(tr("Envelopes hold more than your accounts"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                 }
                 Text(money(b.available, b.currency), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold,
@@ -337,7 +424,7 @@ private fun EnvelopesView(b: BudgetView, accent: Color, onFill: () -> Unit, onOp
                 TextButton(onClick = onFill, modifier = Modifier.testTag("fillOpen")) { Text(tr("Fill")) }
             }
             if (b.envelopes.isNotEmpty() && b.envelopes.all { it.balance == 0L } && b.available > 0) {
-                Text(tr("Give your money jobs: tap Fill"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(horizontal = 16.dp).testTag("fillHint"))
+                Text(tr("Put your money in envelopes: tap Fill"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(horizontal = 16.dp).testTag("fillHint"))
             }
             HorizontalDivider(Modifier.padding(top = 4.dp))
         }
@@ -346,10 +433,10 @@ private fun EnvelopesView(b: BudgetView, accent: Color, onFill: () -> Unit, onOp
             if (group.isNotEmpty()) item(key = "g-$group") {
                 Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 2.dp)) {
                     Text(group.uppercase(Lang.locale), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-                    Text(money(envs.sumOf { it.balance }, b.currency), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(money(envs.fold(0L) { acc, e -> satAdd(acc, e.balance) }, b.currency), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            items(envs, key = { it.id }) { e -> EnvelopeRow(b, e, accent) { onOpen(e) } }
+            items(envs, key = { "e-" + it.id }) { e -> EnvelopeRow(b, e, accent) { onOpen(e) } }
         }
         item {
             Row(Modifier.fillMaxWidth().clickable(onClick = onNew).padding(horizontal = 16.dp, vertical = 14.dp).testTag("newEnvelope"), verticalAlignment = Alignment.CenterVertically) {
@@ -370,7 +457,7 @@ private fun target(e: EnvelopeItem, cur: String): Pair<Long, String> = when (e.k
 private fun EnvelopeRow(b: BudgetView, e: EnvelopeItem, accent: Color, onClick: () -> Unit) {
     val neg = e.balance < 0
     val (of, line) = target(e, b.currency)
-    Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 8.dp).testTag("env-" + e.name)) {
+    Column(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 8.dp).testTag("env-" + e.name), verticalArrangement = Arrangement.Center) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(e.name, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(money(e.balance, b.currency), fontWeight = FontWeight.SemiBold, color = if (neg) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface, modifier = Modifier.testTag("bal-" + e.name))
@@ -457,7 +544,12 @@ private fun EnvelopeEditDialog(b: BudgetView, e: EnvelopeItem?, onClose: () -> U
                 OutlinedTextField(amount, { amount = it }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     label = { Text(when (kind) { "y" -> tr("Amount a year"); "g" -> tr("Goal amount"); else -> tr("Amount a month") }) },
                     prefix = if (b.currency.isNotEmpty()) ({ Text(b.currency) }) else null, modifier = Modifier.testTag("envAmount"))
-                if (kind == "g") OutlinedTextField(due, { due = it }, singleLine = true, isError = !dueOk, label = { Text(tr("By (year-month-day)")) }, modifier = Modifier.testTag("envDue"))
+                // U-S6: the goal's date from a calendar; shown as month and year ("By May 2027").
+                var pickDue by remember { mutableStateOf(false) }
+                if (pickDue) PickDateDialog(due, onPicked = { due = it }, onClose = { pickDue = false })
+                if (kind == "g") OutlinedButton(onClick = { pickDue = true }, modifier = Modifier.heightIn(min = 48.dp).testTag("envDue")) {
+                    Text(tr("By {date}", "date" to (runCatching { shortName(DateTimeFormatter.ofPattern("MMMM yyyy", Lang.locale).format(LocalDate.parse(due))) }.getOrDefault(due))))
+                }
                 OutlinedTextField(group, { group = it }, singleLine = true, label = { Text(tr("Heading (optional)")) }, modifier = Modifier.testTag("envGroup"))
                 val headings = b.envelopes.map { it.group }.filter { it.isNotBlank() }.distinct()
                 if (headings.isNotEmpty()) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -496,13 +588,13 @@ private fun FillDialog(env: Env, list: ListItem, b: BudgetView, extra: Long, onC
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(tr("Available"), Modifier.weight(1f))
+                    Text(tr("Not in an envelope yet"), Modifier.weight(1f))
                     Text(money(b.available, b.currency), fontWeight = FontWeight.SemiBold)
                 }
                 if (extra > 0) Text(tr("Including the {x} you just got", "x" to money(extra, b.currency)), style = MaterialTheme.typography.bodySmall)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { applyPlan("add") }, modifier = Modifier.testTag("fillMonthly")) { Text(tr("Monthly amount")) }
-                    OutlinedButton(onClick = { applyPlan("top") }, modifier = Modifier.testTag("fillTop")) { Text(tr("Top up")) }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { applyPlan("add") }, modifier = Modifier.testTag("fillMonthly")) { Text(tr("Add each month's amount")) }
+                    OutlinedButton(onClick = { applyPlan("top") }, modifier = Modifier.testTag("fillTop")) { Text(tr("Fill up to each month's amount")) }
                 }
                 Column(Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState())) {
                     for (e in b.envelopes) {
@@ -513,15 +605,18 @@ private fun FillDialog(env: Env, list: ListItem, b: BudgetView, extra: Long, onC
                             }
                             val t = fields.value[e.id].orEmpty()
                             OutlinedTextField(t, { v -> fields.value = fields.value + (e.id to v) }, singleLine = true, isError = t.isNotBlank() && parseCents(t) == null,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), placeholder = { Text("0.00") },
-                                modifier = Modifier.width(120.dp).testTag("fill-" + e.name))
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), placeholder = { Text(zeroAmount()) },
+                                modifier = Modifier.weight(1f).widthIn(min = 96.dp).testTag("fill-" + e.name))
                         }
                     }
                 }
                 Row {
-                    Text(tr("Left in Available"), Modifier.weight(1f))
+                    Text(tr("Left over"), Modifier.weight(1f))
                     Text(money(left, b.currency), fontWeight = FontWeight.SemiBold, color = if (left < 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface, modifier = Modifier.testTag("fillLeft"))
                 }
+                // U-S17: allowed, but said.
+                if (left < 0) Text(tr("That's {x} more than you have.", "x" to money(-left, b.currency)), style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("fillOver"))
             }
         },
     )
@@ -529,7 +624,7 @@ private fun FillDialog(env: Env, list: ListItem, b: BudgetView, extra: Long, onC
 
 // ---- Add / edit an entry ---------------------------------------------------------------------
 
-private val KINDS = listOf("exp" to "Spent", "inc" to "Got money", "fill" to "Move", "xfer" to "Transfer")
+private val KINDS = listOf("exp" to "Spent", "inc" to "Got money", "fill" to "Move between envelopes", "xfer" to "Move between accounts")
 
 /** "" = Available, as the "from" of a move. */
 private const val AVAILABLE = ""
@@ -551,24 +646,29 @@ private fun AddSheet(
     val src = edit ?: rep?.tx
     val payees = remember(node, env.version, list.id) { runCatching { node.payees(list.id) }.getOrDefault(emptyList()) }
     val lastAccount = activity.firstOrNull { it.kind == "exp" }?.accountId ?: b.accounts.firstOrNull()?.id ?: ""
-    var kind by remember { mutableStateOf(src?.kind ?: req.kind) }
-    var refund by remember { mutableStateOf(src != null && src.kind == "exp" && src.amount < 0) }
-    var amount by remember { mutableStateOf(src?.let { centsText(kotlin.math.abs(if (it.kind == "fill") it.parts.filter { p -> p.cents > 0 }.sumOf { p -> p.cents } else it.amount)) } ?: "") }
-    var payee by remember { mutableStateOf(src?.payee ?: "") }
-    var note by remember { mutableStateOf(src?.note ?: "") }
-    var date by remember { mutableStateOf(src?.date ?: today()) }
-    var account by remember { mutableStateOf(src?.accountId?.takeIf { it.isNotEmpty() } ?: req.account ?: lastAccount) }
-    var toAccount by remember { mutableStateOf(src?.toId?.takeIf { it.isNotEmpty() } ?: b.accounts.firstOrNull { it.id != account }?.id ?: "") }
+    // U-S5: what is typed survives rotation and Android recreating the app.
+    var kind by rememberSaveable { mutableStateOf(src?.kind ?: req.kind) }
+    var refund by rememberSaveable { mutableStateOf(src != null && src.kind == "exp" && src.amount < 0) }
+    var amount by rememberSaveable { mutableStateOf(src?.let { centsText(kotlin.math.abs(if (it.kind == "fill") it.parts.filter { p -> p.cents > 0 }.sumOf { p -> p.cents } else it.amount)) } ?: "") }
+    var payee by rememberSaveable { mutableStateOf(src?.payee ?: "") }
+    var note by rememberSaveable { mutableStateOf(src?.note ?: "") }
+    var date by rememberSaveable { mutableStateOf(src?.date ?: today()) }
+    var account by rememberSaveable { mutableStateOf(src?.accountId?.takeIf { it.isNotEmpty() } ?: req.account ?: lastAccount) }
+    var toAccount by rememberSaveable { mutableStateOf(src?.toId?.takeIf { it.isNotEmpty() } ?: b.accounts.firstOrNull { it.id != account }?.id ?: "") }
     // Spent: one envelope, or a split (envelope -> typed amount)
-    var envelope by remember { mutableStateOf(src?.parts?.singleOrNull()?.envelopeId ?: req.envelope ?: "") }
-    var split by remember { mutableStateOf(src != null && src.kind == "exp" && src.parts.size > 1) }
+    // U-S4: a new expense starts in the envelope used last, so Save works after amount and "what for".
+    val lastEnvelope = activity.firstOrNull { it.kind == "exp" && it.parts.size == 1 }?.parts?.single()?.envelopeId?.takeIf { id -> b.envelopes.any { it.id == id } }
+    var envelope by rememberSaveable { mutableStateOf(src?.parts?.singleOrNull()?.envelopeId ?: req.envelope ?: lastEnvelope ?: b.envelopes.singleOrNull()?.id ?: "") }
+    var split by rememberSaveable { mutableStateOf(src != null && src.kind == "exp" && src.parts.size > 1) }
     var splitText by remember { mutableStateOf(src?.takeIf { it.kind == "exp" }?.parts?.associate { it.envelopeId to centsText(kotlin.math.abs(it.cents)) } ?: emptyMap()) }
     // Move: from (envelope or Available) -> to
-    var from by remember { mutableStateOf(src?.takeIf { it.kind == "fill" }?.parts?.firstOrNull { it.cents < 0 }?.envelopeId ?: req.envelope ?: AVAILABLE) }
-    var to by remember { mutableStateOf(src?.takeIf { it.kind == "fill" }?.parts?.firstOrNull { it.cents > 0 }?.envelopeId ?: b.envelopes.firstOrNull { it.id != from }?.id ?: "") }
-    var fillAfter by remember { mutableStateOf(false) }
-    var every by remember { mutableStateOf(rep?.every ?: "") }
-    var pickDate by remember { mutableStateOf(false) }
+    var from by rememberSaveable { mutableStateOf(src?.takeIf { it.kind == "fill" }?.parts?.firstOrNull { it.cents < 0 }?.envelopeId ?: req.envelope ?: AVAILABLE) }
+    var to by rememberSaveable { mutableStateOf(src?.takeIf { it.kind == "fill" }?.parts?.firstOrNull { it.cents > 0 }?.envelopeId ?: b.envelopes.firstOrNull { it.id != from }?.id ?: "") }
+    var fillAfter by rememberSaveable { mutableStateOf(false) }
+    var every by rememberSaveable { mutableStateOf(rep?.every ?: "") }
+    var pickDate by rememberSaveable { mutableStateOf(false) }
+    var tried by rememberSaveable { mutableStateOf(false) }
+    var saveError by remember { mutableStateOf<String?>(null) }
     val focus = remember { FocusRequester() }
     androidx.compose.runtime.LaunchedEffect(Unit) { kotlinx.coroutines.delay(100); runCatching { focus.requestFocus() } }
 
@@ -577,7 +677,7 @@ private fun AddSheet(
         runCatching { LocalDate.parse(date) < LocalDate.parse(today()).minusDays(366) }.getOrDefault(false)
     val cents = parseCents(amount)?.takeIf { it > 0 }
     val splitParts = splitText.mapNotNull { (id, t) -> parseCents(t)?.takeIf { it > 0 }?.let { id to it } }
-    val splitLeft = (cents ?: 0) - splitParts.sumOf { it.second }
+    val splitLeft = satAdd(cents ?: 0, -splitParts.fold(0L) { acc, p -> satAdd(acc, p.second) })
     val sign = if (refund) -1 else 1
     val input: TxEdit? = cents?.let { c ->
         when (kind) {
@@ -593,10 +693,23 @@ private fun AddSheet(
             else -> null
         }
     }
+    // U-S4: why Save can't go yet, said under the amount once Save is tapped.
+    val missing: String? = when {
+        cents == null -> if (amount.isBlank()) tr("Type an amount") else tr("Use numbers, like {x}", "x" to money(1250L))
+        kind == "exp" && b.accounts.isEmpty() || kind == "inc" && b.accounts.isEmpty() -> tr("Add an account first (Accounts)")
+        (kind == "exp" || kind == "inc" || kind == "xfer") && account.isEmpty() -> tr("Pick an account")
+        kind == "exp" && !split && b.envelopes.isEmpty() -> tr("Add an envelope first")
+        kind == "exp" && !split && envelope.isEmpty() -> tr("Pick an envelope")
+        kind == "exp" && split && splitLeft != 0L -> tr("{x} still to split", "x" to money(splitLeft, b.currency))
+        kind == "fill" && (to.isEmpty() || to == from) -> tr("Pick where the money goes")
+        kind == "xfer" && (toAccount.isEmpty() || account == toAccount) -> tr("Pick two different accounts")
+        else -> null
+    }
     fun save() {
-        val t = input ?: return
+        if (input == null) { tried = true; return }
+        val t = input
         if (every.isNotEmpty() && edit == null) {
-            val id = runCatching { node.setRepeating(list.id, rep?.id, every, t) }.getOrNull() ?: return
+            val id = runCatching { node.setRepeating(list.id, rep?.id, every, t) }.onFailure { saveError = userError(it, tr("Couldn't save. Try again.")) }.getOrNull() ?: return
             val posted = runCatching { node.postDue(list.id, today()) }.getOrDefault(emptyList())
             val undo: () -> Unit = if (rep == null) ({
                 node.deleteRepeating(list.id, id, false)
@@ -608,47 +721,40 @@ private fun AddSheet(
             onSaved(if (rep == null) tr("Saved") else tr("Changed"), undo, null)
             return
         }
-        val id = runCatching { node.setTx(list.id, edit?.id, t) }.getOrNull() ?: return
+        val id = runCatching { node.setTx(list.id, edit?.id, t) }.onFailure { saveError = userError(it, tr("Couldn't save. Try again.")) }.getOrNull() ?: return
         val undo: () -> Unit = if (edit == null) ({ node.deleteTx(list.id, id) }) else ({ node.restoreTx(list.id, edit) })
         onSaved(if (edit == null) tr("Saved") else tr("Changed"), undo, if (kind == "inc" && fillAfter && edit == null) t.amount else null)
     }
 
+    val typedSomething = amount.isNotBlank() || payee.isNotBlank() || note.isNotBlank()
+    val enter = KeyboardActions(onDone = { save() })
+    // U-S6: dates come from a calendar in the person's own order.
+    if (pickDate) PickDateDialog(date, onPicked = { date = it }, onClose = { pickDate = false })
     AlertDialog(
         onDismissRequest = onClose,
-        confirmButton = { TextButton(onClick = ::save, enabled = input != null && !tooOld, modifier = Modifier.testTag("addSave")) { Text(tr("Save")) } },
-        dismissButton = {
-            Row {
-                if (edit != null) TextButton(onClick = {
-                    runCatching { node.deleteTx(list.id, edit.id) }
-                    onSaved(tr("Deleted"), { node.restoreTx(list.id, edit) }, null)
-                }, modifier = Modifier.testTag("addDelete")) { Text(tr("Delete"), color = MaterialTheme.colorScheme.error) }
-                if (rep != null) TextButton(onClick = {
-                    runCatching { node.deleteRepeating(list.id, rep.id, false) }
-                    onSaved(tr("Stopped repeating"), { node.deleteRepeating(list.id, rep.id, true) }, null)
-                }, modifier = Modifier.testTag("repStop")) { Text(tr("Stop repeating"), color = MaterialTheme.colorScheme.error) }
-                // Everything it posted, in one go (round 5, S2), with Undo.
-                if (rep != null) TextButton(onClick = {
-                    val gone = runCatching { node.deleteRepeatingAndEntries(list.id, rep.id) }.getOrNull() ?: return@TextButton
-                    onSaved(tr("Removed {n} entries", "n" to gone.size), {
-                        for (t in gone) node.restoreTx(list.id, t)
-                        node.deleteRepeating(list.id, rep.id, true)
-                    }, null)
-                }, modifier = Modifier.testTag("repRemoveAll")) { Text(tr("Remove all"), color = MaterialTheme.colorScheme.error) }
-                TextButton(onClick = onClose) { Text(tr("Cancel")) }
-            }
-        },
+        // U-S5: a stray tap beside the sheet doesn't throw away what was typed (Back and Cancel still close it).
+        properties = DialogProperties(dismissOnClickOutside = !typedSomething),
+        // U-S4: Save stays tappable; when something is missing it says what, under the amount.
+        confirmButton = { TextButton(onClick = ::save, enabled = !tooOld, modifier = Modifier.testTag("addSave")) { Text(tr("Save")) } },
+        // U-S15: only Cancel and Save in the footer; the red actions live at the bottom of the sheet.
+        dismissButton = { TextButton(onClick = onClose, modifier = Modifier.testTag("addCancel")) { Text(tr("Cancel")) } },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     for ((k, l) in KINDS) FilterChip(kind == k, { kind = k }, label = { Text(tr(l)) }, modifier = Modifier.testTag("kind-$k"))
                 }
-                OutlinedTextField(amount, { amount = it }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                OutlinedTextField(amount, { amount = it }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done), keyboardActions = enter,
                     label = { Text(tr("Amount")) }, isError = amount.isNotBlank() && cents == null,
+                    supportingText = if (amount.isNotBlank() && cents == null) ({ Text(tr("Use numbers, like {x}", "x" to money(1250L))) }) else null,
                     prefix = if (b.currency.isNotEmpty()) ({ Text(b.currency) }) else null,
                     modifier = Modifier.fillMaxWidth().focusRequester(focus).testTag("amount"))
+                if (tried && missing != null) Text(missing, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.semantics { liveRegion = androidx.compose.ui.semantics.LiveRegionMode.Polite }.testTag("addMissing"))
+                saveError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("addError")) }
                 when (kind) {
                     "exp" -> {
-                        OutlinedTextField(payee, { payee = it }, singleLine = true, label = { Text(tr("What for")) }, modifier = Modifier.fillMaxWidth().testTag("payee"))
+                        OutlinedTextField(payee, { payee = it }, singleLine = true, label = { Text(tr("What for")) },
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done), keyboardActions = enter, modifier = Modifier.fillMaxWidth().testTag("payee"))
                         val suggest = payees.filter { it.payee.isNotBlank() && it.payee != payee && (payee.isBlank() || it.payee.contains(payee.trim(), ignoreCase = true)) }.take(4)
                         if (suggest.isNotEmpty() && edit == null) FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             for (p in suggest) FilterChip(false, {
@@ -665,33 +771,39 @@ private fun AddSheet(
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 for (e in b.envelopes) FilterChip(envelope == e.id, { envelope = e.id }, label = { Text(tr("{name} · {x} left", "name" to e.name, "x" to money(e.balance, b.currency))) }, modifier = Modifier.testTag("envChip-" + e.name))
                             }
+                            // U-S3: say it before the envelope goes below zero.
+                            val picked = b.envelopes.find { it.id == envelope }
+                            if (picked != null && cents != null && !refund && edit == null && picked.balance - cents < 0) Text(
+                                tr("{name} will be {x} short. Fill it from Not in an envelope yet.", "name" to picked.name, "x" to money(cents - picked.balance, b.currency)),
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("envShort"))
                         } else {
                             for (e in b.envelopes) Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(e.name, Modifier.weight(1f))
-                                OutlinedTextField(splitText[e.id].orEmpty(), { splitText = splitText + (e.id to it) }, singleLine = true, placeholder = { Text("0.00") },
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.width(120.dp).testTag("splitAmt-" + e.name))
+                                OutlinedTextField(splitText[e.id].orEmpty(), { splitText = splitText + (e.id to it) }, singleLine = true, placeholder = { Text(zeroAmount()) },
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.weight(1f).widthIn(min = 96.dp).testTag("splitAmt-" + e.name))
                             }
                             Text(if (splitLeft == 0L) tr("Adds up") else tr("{x} still to split", "x" to money(splitLeft, b.currency)),
                                 color = if (splitLeft == 0L) gainColor() else MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("splitLeft"))
                         }
                         AccountChips(b, tr("Paid from"), account, "acct") { account = it }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).toggleable(refund, role = Role.Switch, onValueChange = { refund = it }).testTag("refund"), verticalAlignment = Alignment.CenterVertically) {
                             Text(tr("Refund (money back)"), Modifier.weight(1f))
-                            Switch(refund, { refund = it }, modifier = Modifier.testTag("refund"))
+                            Switch(refund, null)
                         }
                     }
                     "inc" -> {
-                        OutlinedTextField(payee, { payee = it }, singleLine = true, label = { Text(tr("From")) }, modifier = Modifier.fillMaxWidth().testTag("payee"))
+                        OutlinedTextField(payee, { payee = it }, singleLine = true, label = { Text(tr("From")) },
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done), keyboardActions = enter, modifier = Modifier.fillMaxWidth().testTag("payee"))
                         AccountChips(b, tr("Into"), account, "acct") { account = it }
-                        if (edit == null && every.isEmpty()) Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (edit == null && every.isEmpty()) Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).toggleable(fillAfter, role = Role.Switch, onValueChange = { fillAfter = it }).testTag("fillAfter"), verticalAlignment = Alignment.CenterVertically) {
                             Text(tr("Put it in envelopes now"), Modifier.weight(1f))
-                            Switch(fillAfter, { fillAfter = it }, modifier = Modifier.testTag("fillAfter"))
+                            Switch(fillAfter, null)
                         }
                     }
                     "fill" -> {
                         Text(tr("From"), style = MaterialTheme.typography.labelLarge)
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            FilterChip(from == AVAILABLE, { from = AVAILABLE }, label = { Text(tr("Available") + " · " + money(b.available, b.currency)) }, modifier = Modifier.testTag("from-available"))
+                            FilterChip(from == AVAILABLE, { from = AVAILABLE }, label = { Text(tr("Not in an envelope yet") + " · " + money(b.available, b.currency)) }, modifier = Modifier.testTag("from-available"))
                             for (e in b.envelopes) FilterChip(from == e.id, { from = e.id }, label = { Text(e.name + " · " + money(e.balance, b.currency)) }, modifier = Modifier.testTag("from-" + e.name))
                         }
                         Text(tr("To"), style = MaterialTheme.typography.labelLarge)
@@ -707,14 +819,9 @@ private fun AddSheet(
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.Center) {
                     val t = today()
                     val y = LocalDate.now().minusDays(1).toString()
-                    FilterChip(date == t, { date = t; pickDate = false }, label = { Text(tr("Today")) }, modifier = Modifier.testTag("dateToday"))
-                    FilterChip(date == y, { date = y; pickDate = false }, label = { Text(tr("Yesterday")) }, modifier = Modifier.testTag("dateYesterday"))
-                    FilterChip(date != t && date != y || pickDate, { pickDate = true }, label = { Text(if (date != t && date != y) dayLabel(date) else tr("Pick…")) }, modifier = Modifier.testTag("datePick"))
-                }
-                if (pickDate) {
-                    var typed by remember { mutableStateOf(date) }
-                    OutlinedTextField(typed, { typed = it; if (runCatching { LocalDate.parse(it) }.isSuccess) date = it }, singleLine = true,
-                        isError = runCatching { LocalDate.parse(typed) }.isFailure, label = { Text(tr("Date (year-month-day)")) }, modifier = Modifier.testTag("dateText"))
+                    FilterChip(date == t, { date = t }, label = { Text(tr("Today")) }, modifier = Modifier.testTag("dateToday"))
+                    FilterChip(date == y, { date = y }, label = { Text(tr("Yesterday")) }, modifier = Modifier.testTag("dateYesterday"))
+                    FilterChip(date != t && date != y, { pickDate = true }, label = { Text(if (date != t && date != y) dayLabel(date) else tr("Pick…")) }, modifier = Modifier.testTag("datePick"))
                 }
                 if (edit == null) FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     if (rep == null) FilterChip(every.isEmpty(), { every = "" }, label = { Text(tr("Once")) }, modifier = Modifier.testTag("every-once"))
@@ -722,7 +829,26 @@ private fun AddSheet(
                 }
                 if (rep != null) Text(tr("Changes apply from {date} on", "date" to dayLabel(rep.next)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (tooOld) Text(tr("A repeat can start at most a year back"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("repTooOld"))
-                OutlinedTextField(note, { note = it }, singleLine = true, label = { Text(tr("Note")) }, modifier = Modifier.fillMaxWidth().testTag("note"))
+                OutlinedTextField(note, { note = it }, singleLine = true, label = { Text(tr("Note")) },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done), keyboardActions = enter, modifier = Modifier.fillMaxWidth().testTag("note"))
+                if (edit != null || rep != null) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
+                    if (edit != null) TextButton(onClick = {
+                        runCatching { node.deleteTx(list.id, edit.id) }
+                        onSaved(tr("Deleted"), { node.restoreTx(list.id, edit) }, null)
+                    }, modifier = Modifier.testTag("addDelete")) { Text(tr("Delete"), color = MaterialTheme.colorScheme.error) }
+                    if (rep != null) TextButton(onClick = {
+                        runCatching { node.deleteRepeating(list.id, rep.id, false) }
+                        onSaved(tr("Stopped repeating"), { node.deleteRepeating(list.id, rep.id, true) }, null)
+                    }, modifier = Modifier.testTag("repStop")) { Text(tr("Stop repeating"), color = MaterialTheme.colorScheme.error) }
+                    // Everything it posted, in one go (round 5, S2), with Undo.
+                    if (rep != null) TextButton(onClick = {
+                        val gone = runCatching { node.deleteRepeatingAndEntries(list.id, rep.id) }.getOrNull() ?: return@TextButton
+                        onSaved(tr("Removed {n} entries", "n" to gone.size), {
+                            for (t in gone) node.restoreTx(list.id, t)
+                            node.deleteRepeating(list.id, rep.id, true)
+                        }, null)
+                    }, modifier = Modifier.testTag("repRemoveAll")) { Text(tr("Remove all"), color = MaterialTheme.colorScheme.error) }
+                }
             }
         },
     )
@@ -759,6 +885,9 @@ private fun ActivityView(b: BudgetView, activity: List<TxItem>, repeating: List<
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp).testTag("activitySearch"))
         if (activity.isEmpty() && repeating.isEmpty()) {
             Text(tr("Nothing yet. What you spend and get shows up here."), color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(24.dp).testTag("activityEmpty"))
+        } else if (q.isNotEmpty() && shown.isEmpty()) {
+            // U-S21: a search that finds nothing says so.
+            Text(tr("Nothing matches “{q}”", "q" to q), color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(24.dp).testTag("searchEmpty"))
         }
         LazyColumn(Modifier.weight(1f)) {
             if (q.isEmpty() && repeating.isNotEmpty()) {
@@ -858,11 +987,17 @@ private fun ReconcileDialog(env: Env, list: ListItem, b: BudgetView, a: AccountI
                     Text(tr("Last statement: {date}, {amount}", "date" to dayLabel(a.recDate), "amount" to money(a.recBalance, b.currency)),
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("recLast"))
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(date, { date = it }, singleLine = true, isError = !dateOk, label = { Text(tr("Statement date")) }, placeholder = { Text("2026-11-30") },
-                        modifier = Modifier.weight(1f).testTag("recDate"))
+                // U-S20: what this is for, in plain words.
+                Text(tr("Check your entries against your bank statement."), style = MaterialTheme.typography.bodyMedium)
+                var pickStmt by remember { mutableStateOf(false) }
+                if (pickStmt) PickDateDialog(date, onPicked = { date = it }, onClose = { pickStmt = false })
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    // U-S6: the statement's date from a calendar, not typed as year-month-day.
+                    OutlinedButton(onClick = { pickStmt = true }, modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("recDate")) {
+                        Text(tr("Statement of {date}", "date" to (if (dateOk) dayLabel(date.trim()) else "…")), maxLines = 2)
+                    }
                     OutlinedTextField(statement, { statement = it }, singleLine = true, isError = statement.isNotBlank() && stmt == null,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), label = { Text(tr("Ending balance")) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), label = { Text(tr("Balance on the statement")) },
                         prefix = if (b.currency.isNotEmpty()) ({ Text(b.currency) }) else null, modifier = Modifier.weight(1f).testTag("recStatement"))
                 }
                 Text(tr("Tick each entry your statement shows."), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -870,9 +1005,10 @@ private fun ReconcileDialog(env: Env, list: ListItem, b: BudgetView, a: AccountI
                     if (open.isEmpty()) Text(tr("No entries to tick."), color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 8.dp))
                     for (t in open) {
                         val ticked = t.status == 1L
-                        Row(Modifier.fillMaxWidth().clickable { runCatching { env.node.setCleared(list.id, t.id, !ticked) }; env.changed() }.testTag("rec-" + entryTitle(t)),
+                        // U-S20: one control per row for screen readers, the checkbox only shows the state.
+                        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).toggleable(ticked, role = Role.Checkbox, onValueChange = { v -> runCatching { env.node.setCleared(list.id, t.id, v) }; env.changed() }).testTag("rec-" + entryTitle(t)),
                             verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(ticked, { runCatching { env.node.setCleared(list.id, t.id, it) }; env.changed() })
+                            Checkbox(ticked, null)
                             Column(Modifier.weight(1f)) {
                                 Text(entryTitle(t), maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 Text(dayLabel(t.date), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -885,7 +1021,7 @@ private fun ReconcileDialog(env: Env, list: ListItem, b: BudgetView, a: AccountI
                     Icon(Ic.Add, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text(tr("Add a missing entry"))
                 }
                 HorizontalDivider()
-                Row { Text(tr("Cleared balance"), Modifier.weight(1f)); Text(money(a.cleared, b.currency), fontWeight = FontWeight.SemiBold, modifier = Modifier.testTag("recCleared")) }
+                Row { Text(tr("Ticked so far"), Modifier.weight(1f)); Text(money(a.cleared, b.currency), fontWeight = FontWeight.SemiBold, modifier = Modifier.testTag("recCleared")) }
                 if (diff != null) {
                     Row {
                         Text(tr("Difference"), Modifier.weight(1f))
@@ -905,7 +1041,7 @@ private val ACCOUNT_KINDS = listOf("bank" to "Bank", "cash" to "Cash", "card" to
 @Composable
 private fun AccountsView(b: BudgetView, onOpen: (AccountItem) -> Unit, onNew: () -> Unit) {
     LazyColumn(Modifier.fillMaxSize()) {
-        items(b.accounts, key = { it.id }) { a ->
+        items(b.accounts, key = { "a-" + it.id }) { a ->
             Row(Modifier.fillMaxWidth().clickable { onOpen(a) }.padding(horizontal = 16.dp, vertical = 12.dp).testTag("acct-" + a.name), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(a.name)
@@ -934,8 +1070,11 @@ private fun AccountsView(b: BudgetView, onOpen: (AccountItem) -> Unit, onNew: ()
 private fun AccountDialog(b: BudgetView, a: AccountItem?, onClose: () -> Unit, onReconcile: (() -> Unit)?, onDelete: (() -> Unit)?, onSave: (String, String, Long) -> Unit) {
     var name by remember { mutableStateOf(a?.name ?: "") }
     var kind by remember { mutableStateOf(a?.kind ?: "bank") }
-    var balance by remember { mutableStateOf(a?.let { centsText(it.balance) } ?: "") }
-    val cents = if (balance.isBlank()) 0L else parseCents(balance)
+    // U-S13: no typed minus sign (number keyboards often lack one): a card asks what is owed, others have "Overdrawn".
+    var balance by remember { mutableStateOf(a?.let { centsText(if (it.kind == "card") -it.balance else kotlin.math.abs(it.balance)) } ?: "") }
+    var overdrawn by remember { mutableStateOf(a != null && a.kind != "card" && a.balance < 0) }
+    val typed = if (balance.isBlank()) 0L else parseCents(balance)
+    val cents = typed?.let { if (kind == "card" || overdrawn) -it else it }
     val ok = name.isNotBlank() && cents != null
     AlertDialog(
         onDismissRequest = onClose,
@@ -960,8 +1099,12 @@ private fun AccountDialog(b: BudgetView, a: AccountItem?, onClose: () -> Unit, o
                     for ((k, l) in ACCOUNT_KINDS) FilterChip(kind == k, { kind = k }, label = { Text(tr(l)) }, modifier = Modifier.testTag("acctKind-$k"))
                 }
                 OutlinedTextField(balance, { balance = it }, singleLine = true, isError = cents == null, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    label = { Text(tr("How much is in it today?")) }, prefix = if (b.currency.isNotEmpty()) ({ Text(b.currency) }) else null, modifier = Modifier.testTag("acctBalance"))
-                Text(if (kind == "card") tr("For a card, enter what you owe as a negative amount.") else tr("This changes Available by the same amount."),
+                    label = { Text(if (kind == "card") tr("How much do you owe on it?") else tr("How much is in it today?")) }, prefix = if (b.currency.isNotEmpty()) ({ Text(b.currency) }) else null, modifier = Modifier.testTag("acctBalance"))
+                if (kind != "card") Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).toggleable(overdrawn, role = Role.Switch, onValueChange = { overdrawn = it }).testTag("acctOverdrawn"), verticalAlignment = Alignment.CenterVertically) {
+                    Text(tr("Overdrawn (below zero)"), Modifier.weight(1f))
+                    Switch(overdrawn, null)
+                }
+                Text(tr("This changes Not in an envelope yet by the same amount."),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 onReconcile?.let {
                     OutlinedButton(onClick = it, modifier = Modifier.testTag("reconcileOpen")) {
@@ -992,10 +1135,10 @@ private fun MonthView(env: Env, list: ListItem, b: BudgetView, activity: List<Tx
             IconButton(onClick = { month = month.plusMonths(1) }, enabled = month < YearMonth.now(), modifier = Modifier.testTag("monthNext")) { Icon(Ic.Right, tr("Next month")) }
         }
         Row {
-            Text(tr("Spent"), Modifier.weight(1f)); Text(money(spent, b.currency), fontWeight = FontWeight.SemiBold, modifier = Modifier.testTag("monthSpent"))
+            Text(tr("Spent in total"), Modifier.weight(1f)); Text(money(spent, b.currency), fontWeight = FontWeight.SemiBold, modifier = Modifier.testTag("monthSpent"))
         }
         Row {
-            Text(tr("Got"), Modifier.weight(1f)); Text(money(got, b.currency), fontWeight = FontWeight.SemiBold, color = gainColor(), modifier = Modifier.testTag("monthGot"))
+            Text(tr("Received in total"), Modifier.weight(1f)); Text(money(got, b.currency), fontWeight = FontWeight.SemiBold, color = gainColor(), modifier = Modifier.testTag("monthGot"))
         }
         HorizontalDivider()
         if (spend.isEmpty()) Text(tr("Nothing spent this month."), color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("monthEmpty"))
@@ -1020,7 +1163,7 @@ private fun MonthView(env: Env, list: ListItem, b: BudgetView, activity: List<Tx
  * still restore a backup or link to another device.
  */
 @Composable
-fun FirstBudget(env: Env, onLinkThis: () -> Unit, onMenu: (() -> Unit)?, open: (ListItem) -> Unit) {
+fun FirstBudget(env: Env, onLinkThis: () -> Unit, onJoin: () -> Unit, onMenu: (() -> Unit)?, open: (ListItem) -> Unit) {
     var text by remember { mutableStateOf("") }
     val cents = if (text.isBlank()) 0L else parseCents(text)
     fun start() {
@@ -1030,8 +1173,13 @@ fun FirstBudget(env: Env, onLinkThis: () -> Unit, onMenu: (() -> Unit)?, open: (
         runCatching { node.setListStyle(l.id, budgetHue(0), 1u, null) }
         runCatching {
             node.setAccount(l.id, null, tr("Bank"), "bank", c)
-            for ((name, amt) in listOf(tr("Groceries") to 30000L, tr("Bills") to 20000L, tr("Fun") to 5000L)) node.setEnvelope(l.id, null, name, amt, "m", null, "")
+            // U-S12: no made-up monthly amounts (they meant nothing in another currency); the person sets their own.
+            for (name in listOf(tr("Groceries"), tr("Bills"), tr("Fun"))) node.setEnvelope(l.id, null, name, 0L, "m", null, "")
         }
+        // U-S12: the currency symbol from the device's country ("$" in Argentina, "€" in Spain); ⋮ › Currency symbol changes it.
+        runCatching { java.util.Currency.getInstance(java.util.Locale.getDefault()).getSymbol(java.util.Locale.getDefault()) }.getOrNull()
+            ?.takeIf { it.isNotBlank() && it.length <= 8 }
+            ?.let { sym -> runCatching { node.setCurrency(l.id, sym) } }
         open(l)
         env.changed()
     }
@@ -1043,13 +1191,34 @@ fun FirstBudget(env: Env, onLinkThis: () -> Unit, onMenu: (() -> Unit)?, open: (
         Column(Modifier.weight(1f).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(tr("How much is in your bank account today?"), style = MaterialTheme.typography.titleMedium)
             OutlinedTextField(text, { text = it }, singleLine = true, isError = cents == null, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                placeholder = { Text("0.00") }, modifier = Modifier.testTag("firstBalance"))
-            Button(onClick = ::start, enabled = cents != null, modifier = Modifier.testTag("firstStart")) { Text(tr("Start")) }
-            Text(tr("Using it on another device? Link this one"), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.clickable(onClick = onLinkThis).testTag("firstLink"))
+                placeholder = { Text(zeroAmount()) }, modifier = Modifier.testTag("firstBalance"))
+            Button(onClick = ::start, enabled = cents != null, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("firstStart")) { Text(tr("Start my budget")) }
+            // U-S1: a partner who installs the app to join a shared budget gets a full-size way in, not only device linking.
+            Text(tr("Or"), color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.align(Alignment.CenterHorizontally))
+            OutlinedButton(onClick = onJoin, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("firstJoin")) { Text(tr("Join someone's budget")) }
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = onLinkThis, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("firstLink")) {
+                Text(tr("Link to my own other phone or computer"))
+            }
         }
     }
 }
 
 /** A new budget's color: green first, then the next of a few distinct hues (changeable in ⋮ › Color). */
 fun budgetHue(index: Int): Double = listOf(150.0, 210.0, 30.0, 280.0, 340.0)[Math.floorMod(index, 5)]
+
+/** Adds without wrapping (S3-6: a heading's total of saturated balances must not turn negative). */
+internal fun satAdd(a: Long, b: Long): Long {
+    val r = a + b
+    return if (((a xor r) and (b xor r)) < 0) (if (a < 0) Long.MIN_VALUE else Long.MAX_VALUE) else r
+}
+
+/** The shared budget's sync line and whether it is a warning; null before the first sync round has said anything (U-T4). */
+internal fun syncLine(s: com.jurisgames.sobres.core.GroupSync, firstRoundDone: Boolean): Pair<String, Boolean>? {
+    if (s.onlyHere) return tr("Not sent yet: your newest changes are only on this device.") to true
+    if (!firstRoundDone) return null
+    val fmt = java.time.format.DateTimeFormatter.ofLocalizedDateTime(java.time.format.FormatStyle.SHORT).withLocale(Lang.locale)
+    val others = s.othersLastMs?.let { tr("the others last synced {when}", "when" to fromMillis(it.toLong()).format(fmt)) }
+        ?: tr("the others haven't synced yet")
+    return tr("Sent") + " · " + others to false
+}
