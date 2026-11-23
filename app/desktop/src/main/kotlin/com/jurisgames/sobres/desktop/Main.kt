@@ -73,7 +73,7 @@ private object TrayIcon : Painter() {
  */
 /** This build's version code (the update manifest compares against it): the same number as the Android build
  * (app/android/build.gradle.kts versionCode), checked by VersionCodeTest. */
-const val VERSION_CODE = 4uL
+const val VERSION_CODE = 5uL
 
 fun main(args: Array<String>) {
     // Packaged app: the Rust library and the import worker ship in its resources folder.
