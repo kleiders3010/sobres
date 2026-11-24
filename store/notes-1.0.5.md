@@ -6,10 +6,10 @@ Each line is a change committed after v1.0.4 (80d3004): c9adf5f, 94f37c6, b5a220
 ## Play "What's new" (500 characters max each)
 
 en-US:
-Turning the phone or switching dark mode keeps you where you were. Colour choices are bigger and named for screen readers. "Removed 1 entry" reads right. A backup that can't be saved leaves no empty file behind, and never removes an older backup you chose to replace. "Undo someone's changes" is gone from the budget menu for now: it could not undo budget entries yet.
+Turning the phone or switching dark mode keeps you where you were. Colour choices are bigger and named for screen readers. "Removed 1 entry" reads right. A backup that can't be saved leaves no empty file behind, and never removes an older backup you chose to replace. "Undo someone's changes" now really puts back what that person changed in a budget (before, it found nothing to undo).
 
 es-419:
-Girar el teléfono o cambiar al modo oscuro te deja donde estabas. Los colores para elegir son más grandes y tienen nombre para los lectores de pantalla. "Se quitó 1 movimiento" se lee bien. Una copia que no se pudo guardar no deja un archivo vacío, y nunca borra una copia anterior que elegiste reemplazar. "Deshacer cambios de alguien" ya no está en el menú del presupuesto por ahora: todavía no podía deshacer movimientos.
+Girar el teléfono o cambiar al modo oscuro te deja donde estabas. Los colores para elegir son más grandes y tienen nombre para los lectores de pantalla. "Se quitó 1 movimiento" se lee bien. Una copia que no se pudo guardar no deja un archivo vacío, y nunca borra una copia anterior que elegiste reemplazar. "Deshacer cambios de alguien" ahora sí devuelve lo que esa persona cambió en un presupuesto (antes no encontraba nada para deshacer).
 
 ## GitHub release (Windows extras on top of the above)
 

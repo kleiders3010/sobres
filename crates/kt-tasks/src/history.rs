@@ -9,9 +9,9 @@
 //! previous generations (kept 30 days, `Replica::doc_archive`). Changes carry the author's
 //! timestamp (per minute); changes without one count as older than any time.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use loro::{LoroDoc, LoroValue, TreeID, ValueOrContainer, VersionVector, ID};
+use loro::{Container, ContainerID, ContainerTrait, LoroDoc, LoroMap, LoroValue, TreeID, ValueOrContainer, VersionVector, ID};
 
 use super::{add_task, delete_task, flat, move_task, set_done, set_notes, set_title, tree, Result};
 
@@ -121,6 +121,105 @@ pub fn undo_by(now: &LoroDoc, history: &LoroDoc, authors: &HashSet<u64>, since_m
             }
         }
     }
+    undone += undo_budget(now, history, &then, authors)?;
+    Ok(undone)
+}
+
+/// A map entry that is itself a map.
+fn child_map(m: &LoroMap, key: &str) -> Option<LoroMap> {
+    match m.get(key) {
+        Some(ValueOrContainer::Container(Container::Map(c))) => Some(c),
+        _ => None,
+    }
+}
+
+/// A field's value, a map field as its whole content (a split's parts).
+fn deep(m: &LoroMap, key: &str) -> Option<LoroValue> {
+    m.get(key).map(|v| match v {
+        ValueOrContainer::Value(v) => v,
+        ValueOrContainer::Container(Container::Map(c)) => c.get_deep_value(),
+        ValueOrContainer::Container(_) => LoroValue::Null,
+    })
+}
+
+fn copy_into(from: &LoroMap, to: &LoroMap) -> Result<()> {
+    for k in from.keys() {
+        match from.get(&k) {
+            Some(ValueOrContainer::Value(v)) => to.insert(&k, v).map_err(crate::loro)?,
+            Some(ValueOrContainer::Container(Container::Map(c))) => copy_into(&c, &to.insert_container(&k, LoroMap::new()).map_err(crate::loro)?)?,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Fields of one map `authors` changed since (and nobody changed again): back to `then`'s value.
+fn undo_fields(then: &LoroMap, hist: &LoroMap, now: &LoroMap, authors: &HashSet<u64>) -> Result<usize> {
+    let keys: BTreeSet<String> = then.keys().chain(hist.keys()).map(|k| k.to_string()).collect();
+    let mut n = 0;
+    for f in keys {
+        let (vt, vh) = (deep(then, &f), deep(hist, &f));
+        if vt == vh || deep(now, &f) != vh || !hist.get_last_editor(&f).is_some_and(|p| authors.contains(&p)) {
+            continue;
+        }
+        match then.get(&f) {
+            None => now.delete(&f).map_err(crate::loro)?,
+            Some(ValueOrContainer::Value(v)) => now.insert(&f, v).map_err(crate::loro)?,
+            Some(ValueOrContainer::Container(Container::Map(c))) => copy_into(&c, &now.insert_container(&f, LoroMap::new()).map_err(crate::loro)?)?,
+            Some(ValueOrContainer::Container(_)) => continue,
+        }
+        n += 1;
+    }
+    Ok(n)
+}
+
+/// A budget (safety audit 2026-11-24 S4-1: undo walked only the task tree, so a budget always had "nothing to
+/// undo"): envelopes, accounts and entries they added since go (envelopes and accounts the way the app removes
+/// them), entries they deleted come back with who entered them, and fields they changed (a split, a deletion mark
+/// on an envelope, the currency) go back. A task list has none of these maps: nothing happens there.
+fn undo_budget(now: &LoroDoc, history: &LoroDoc, then: &LoroDoc, authors: &HashSet<u64>) -> Result<usize> {
+    let mut undone = undo_fields(&then.get_map("meta"), &history.get_map("meta"), &now.get_map("meta"), authors)?;
+    let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(1);
+    for root in ["env", "acct", "tx"] {
+        let (r_then, r_hist, r_now) = (then.get_map(root), history.get_map(root), now.get_map(root));
+        let keys: BTreeSet<String> = r_then.keys().chain(r_hist.keys()).map(|k| k.to_string()).collect();
+        for k in keys {
+            let c_now = child_map(&r_now, &k);
+            match (child_map(&r_then, &k), child_map(&r_hist, &k)) {
+                (None, Some(h)) => {
+                    let ContainerID::Normal { peer, .. } = h.id() else { continue };
+                    if !authors.contains(&peer) || c_now.is_none() {
+                        continue;
+                    }
+                    match root {
+                        "env" => crate::budget::delete_envelope(now, &k, now_ms, false)?,
+                        "acct" => crate::budget::delete_account(now, &k, now_ms, false)?,
+                        _ => crate::budget::delete_tx(now, &k)?,
+                    }
+                    undone += 1;
+                }
+                (Some(t), None) => {
+                    if c_now.is_some() || !r_hist.get_last_editor(&k).is_some_and(|p| authors.contains(&p)) {
+                        continue;
+                    }
+                    match crate::budget::transactions(then).into_iter().find(|x| x.id == k).filter(|_| root == "tx") {
+                        Some(x) => crate::budget::restore_tx(now, &x)?,
+                        None => copy_into(&t, &r_now.insert_container(&k, LoroMap::new()).map_err(crate::loro)?)?,
+                    }
+                    undone += 1;
+                }
+                (Some(t), Some(h)) => {
+                    if let Some(n) = c_now {
+                        if undo_fields(&t, &h, &n, authors)? > 0 {
+                            undone += 1;
+                        }
+                    }
+                }
+                (None, None) => {}
+            }
+        }
+    }
+    now.commit();
     Ok(undone)
 }
 

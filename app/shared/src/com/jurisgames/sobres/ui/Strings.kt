@@ -90,6 +90,7 @@ val ES: Map<String, String> = mapOf(
     "Link to my own other phone or computer" to "Vincular con mi otro teléfono o computadora",
     "Not in an envelope yet" to "Sin repartir",
     "Put your money in envelopes: tap Fill" to "Repartí tu plata en sobres: tocá Llenar",
+    "Undo someone's changes…" to "Deshacer cambios de alguien…",
     "Invite made. Waiting for someone to join." to "Invitación creada. Esperando que alguien se una.",
     "Show invite" to "Ver invitación",
     "Delete {name} for everyone?" to "¿Borrar {name} para todos?",
