@@ -1,6 +1,9 @@
 package com.jurisgames.sobres.desktop
 
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
@@ -33,5 +36,21 @@ fun ComposeUiTest.buttonsFit(widthPx: Int, screen: String, openLists: Int): List
     val out = buttons.filter { it.positionInWindow.x + it.size.width > widthPx + 0.5f || it.positionInWindow.x < -0.5f }
         .map { name(it) + " at x " + it.positionInWindow.x + " w " + it.size.width }
     if (out.isNotEmpty()) bad += "$screen: buttons past a ${widthPx}px phone's edge: $out"
+    // 2026-11-24 (Papeles review U-P4/U-P3, swept to every app): the Papeles Spanish store picture showed "Más grande" as "M / ás / gr / an / de" and the
+    // reader's name squeezed to nothing, and this check passed both (nothing was past the edge). A text laid out on
+    // more lines than it has words had a word broken; a screen's title narrower than 80 dp can't be read.
+    for (n in nodes) {
+        if (inScroll(n)) continue
+        val get = n.config.getOrNull(SemanticsActions.GetTextLayoutResult)?.action ?: continue
+        val res = mutableListOf<TextLayoutResult>()
+        if (get(res) != true) continue
+        val r = res.firstOrNull() ?: continue
+        val text = r.layoutInput.text.text
+        val words = text.split(Regex("\\s+")).count { it.isNotEmpty() }
+        if (words > 0 && r.lineCount > words) bad += "$screen: \"$text\" is broken inside a word (${r.lineCount} lines for $words words)"
+    }
+    val minTitle = with(density) { 80.dp.toPx() }
+    nodes.filter { it.config.getOrNull(SemanticsProperties.TestTag) == "title" && it.size.width < minTitle }
+        .forEach { bad += "$screen: the title is squeezed to ${it.size.width}px (under 80 dp): too many buttons in the top row" }
     return bad
 }

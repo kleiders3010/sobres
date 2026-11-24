@@ -70,7 +70,9 @@ class PhoneShotsTest {
         waitUntil(timeoutMillis = 5_000) { onAllNodes(hasTestTag("env-" + t("Groceries", "Supermercado")), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
         check(onAllNodes(hasTestTag("addSpent")).fetchSemanticsNodes().isNotEmpty()) { "the Spent bar is there on a phone" }
         fun shot(name: String) {
-            if (fit) { problems += buttonsFit(w, name, OPEN_LISTS[name] ?: 0); return }
+            // APP-RULE 225: a store picture is fit-checked too, so a broken label never goes public
+            if (fit || store) problems += buttonsFit(w, name, OPEN_LISTS[name] ?: 0)
+            if (fit) return
             val o = out ?: return
             waitForIdle()
             val roots = onAllNodes(isRoot())
