@@ -547,7 +547,7 @@ val ES: Map<String, String> = mapOf(
     "Stop repeating" to "Dejar de repetir",
     "Stopped repeating" to "Ya no se repite",
     "Remove all" to "Quitar todo",
-    "Removed {n} entries" to "Se quitaron {n} movimientos",
+    "Removed {n} entries" to "Se quitaron {n} movimientos", "Removed 1 entry" to "Se quitó 1 movimiento",
     "A repeat can start at most a year back" to "Una repetición puede empezar como mucho un año atrás",
     "edited by {name}" to "editado por {name}",
     "{n} entries could not be read (made by a different app) and count nowhere" to "{n} movimientos no se pudieron leer (los hizo otra app) y no cuentan en ningún lado",

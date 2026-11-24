@@ -53,7 +53,7 @@ fun BackupPasswordDialog(node: KtNode, onClose: () -> Unit) {
         confirmButton = {
             TextButton(enabled = !busy, onClick = {
                 error = when {
-                    pw.length < min -> tr("At least {n} characters", "n" to min.toString())
+                    pw.length < min -> tr("At least {n} characters", "n" to min.toString()) // n>=2: pinned: backup::PW_MIN_CHARS = 8
                     pw != again -> tr("The passwords don't match")
                     else -> ""
                 }

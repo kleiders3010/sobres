@@ -844,7 +844,7 @@ private fun AddSheet(
                     // Everything it posted, in one go (round 5, S2), with Undo.
                     if (rep != null) TextButton(onClick = {
                         val gone = runCatching { node.deleteRepeatingAndEntries(list.id, rep.id) }.getOrNull() ?: return@TextButton
-                        onSaved(tr("Removed {n} entries", "n" to gone.size), {
+                        onSaved((if (gone.size == 1) tr("Removed 1 entry") else tr("Removed {n} entries", "n" to gone.size)), {
                             for (t in gone) node.restoreTx(list.id, t)
                             node.deleteRepeating(list.id, rep.id, true)
                         }, null)

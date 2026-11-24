@@ -27,6 +27,13 @@ import kotlinx.coroutines.withContext
 class MainActivity : ComponentActivity() {
     private val app get() = application as TasksApplication
 
+    // APP-RULES 216: the activity keeps running through rotation and dark mode (configChanges in the manifest), so the
+    // bars' colours are set again here instead of by a fresh start
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        enableEdgeToEdge()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge() // the app draws behind the status and navigation bars and pads itself
         super.onCreate(savedInstanceState)
