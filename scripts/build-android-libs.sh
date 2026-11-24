@@ -15,5 +15,11 @@ done
 cargo build -p kt-ffi
 cargo run -q -p kt-ffi --features bindgen --bin uniffi-bindgen -- generate --library target/debug/kt_ffi.dll --language kotlin --out-dir target/uniffi-kotlin --no-format
 cp target/uniffi-kotlin/com/jurisgames/sobres/core/kt_ffi.kt app/shared/src/com/jurisgames/sobres/core/kt_ffi.kt
-rm -f "$OUT"/*/libiroh*.so  # stray dylibs from dependencies; everything links into libkt_ffi.so
+# only our two libraries ship: cargo ndk also copies dependencies' own dylibs (libiroh*.so before), which
+# nothing loads (everything links into libkt_ffi.so); keep-list, not a name pattern, so a new one is caught too
+find "$OUT" -name '*.so' ! -name libkt_ffi.so ! -name libkt_import.so -delete
+for abi in arm64-v8a x86_64; do
+  got=$(ls "$OUT/$abi" | sort | tr '\n' ' ')
+  [ "$got" = "libkt_ffi.so libkt_import.so " ] || { echo "unexpected libraries in $OUT/$abi: $got"; exit 1; }
+done
 ls -la "$OUT"/*/
