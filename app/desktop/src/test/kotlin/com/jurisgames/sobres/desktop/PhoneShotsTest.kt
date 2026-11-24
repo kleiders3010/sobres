@@ -34,7 +34,14 @@ class PhoneShotsTest {
     private val out = System.getProperty("kt.shots")?.takeIf { it.isNotBlank() }?.let { File(it).apply { mkdirs() } }
 
     @Test
-    fun phone() = runDesktopComposeUiTest(width = if (store) 1080 else 412, height = if (store) 1920 else 860) {
+    fun phone() = flow(if (store) 1080 else 412, if (store) 1920 else 860, fit = false)
+
+    /** APP-RULES 196: the same screens on a small phone (360 dp), every fixed button wholly on screen (PhoneFit.kt). */
+    @Test
+    fun everyButtonFitsASmallPhone() { if (!store) flow(360, 760, fit = true) }
+
+    private fun flow(w: Int, h: Int, fit: Boolean) = runDesktopComposeUiTest(width = w, height = h) {
+        val problems = mutableListOf<String>()
         val home = Files.createTempDirectory("kt-phone").toFile()
         val n = KtNode.open(File(home, "identity").path, File(home, "data").path, System.getProperty("kt.worker"),
             NodeOptions(Platform.DESKTOP, listOf("ws://127.0.0.1:9"), false, false, "127.0.0.1:0", "", ""))
@@ -63,6 +70,7 @@ class PhoneShotsTest {
         waitUntil(timeoutMillis = 5_000) { onAllNodes(hasTestTag("env-" + t("Groceries", "Supermercado")), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
         check(onAllNodes(hasTestTag("addSpent")).fetchSemanticsNodes().isNotEmpty()) { "the Spent bar is there on a phone" }
         fun shot(name: String) {
+            if (fit) { problems += buttonsFit(w, name, OPEN_LISTS[name] ?: 0); return }
             val o = out ?: return
             waitForIdle()
             val roots = onAllNodes(isRoot())
@@ -91,5 +99,9 @@ class PhoneShotsTest {
         onNodeWithTag("kind-fill").performClick()
         shot("4-move")
         n.close()
+        check(problems.isEmpty()) { problems.joinToString("\n") }
     }
+
+    // sideways-scrolling rows each screen may have (open-ended lists only, APP-RULES 196)
+    private val OPEN_LISTS = mapOf<String, Int>()
 }

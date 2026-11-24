@@ -4,7 +4,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -189,6 +188,7 @@ private fun TxItem.toEdit() = TxEdit(kind, date, amount, accountId, toId, payee,
  * [chips] goes under the title bar (phones: the other budgets).
  */
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 fun BudgetPane(
     env: Env,
     list: ListItem,
@@ -315,7 +315,8 @@ fun BudgetPane(
             modifier = Modifier.padding(start = if (onMenu != null) 52.dp else 16.dp, end = 16.dp).testTag("unreadable"),
         )
         chips?.let { Spacer(Modifier.size(4.dp)); it() }
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // a fixed set of sections: they wrap on a small phone instead of scrolling the last ones out of sight (APP-RULES 196)
+        androidx.compose.foundation.layout.FlowRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for (s in Section.entries) FilterChip(section == s, { section = s }, label = { Text(tr(s.label)) }, modifier = Modifier.testTag(s.tag))
         }
         HorizontalDivider()
