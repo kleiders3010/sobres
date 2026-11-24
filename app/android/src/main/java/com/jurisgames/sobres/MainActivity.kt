@@ -96,6 +96,7 @@ class MainActivity : ComponentActivity() {
                             } finally { tmp.delete() }
                         }.isSuccess
                     }
+                    if (!ok) runCatching { android.provider.DocumentsContract.deleteDocument(contentResolver, uri) } // never an empty file (APP-RULE 226)
                     Toast.makeText(this@MainActivity, if (ok) tr("Backup saved") else tr("Couldn't save the backup"), Toast.LENGTH_LONG).show()
                 }
             }
