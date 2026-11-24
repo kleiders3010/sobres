@@ -49,8 +49,14 @@ fun ComposeUiTest.buttonsFit(widthPx: Int, screen: String, openLists: Int): List
         val words = text.split(Regex("\\s+")).count { it.isNotEmpty() }
         if (words > 0 && r.lineCount > words) bad += "$screen: \"$text\" is broken inside a word (${r.lineCount} lines for $words words)"
     }
+    // 2026-11-24 (from QR's emulator check): a title whose text is cut ("Make a co…") or wraps is squeezed too, even
+    // when it is wider than 80 dp; under 80 dp stays the rule for a title that can't be measured.
     val minTitle = with(density) { 80.dp.toPx() }
-    nodes.filter { it.config.getOrNull(SemanticsProperties.TestTag) == "title" && it.size.width < minTitle }
-        .forEach { bad += "$screen: the title is squeezed to ${it.size.width}px (under 80 dp): too many buttons in the top row" }
+    for (n in nodes.filter { it.config.getOrNull(SemanticsProperties.TestTag) == "title" }) {
+        val res = mutableListOf<TextLayoutResult>()
+        val r = if (n.config.getOrNull(SemanticsActions.GetTextLayoutResult)?.action?.invoke(res) == true) res.firstOrNull() else null
+        val cut = r != null && (r.lineCount > 1 || r.multiParagraph.didExceedMaxLines || r.multiParagraph.intrinsics.maxIntrinsicWidth > r.size.width + 2f)
+        if (cut || n.size.width < minTitle) bad += "$screen: the title is squeezed to ${n.size.width}px (cut, wrapped or under 80 dp): too many buttons in the top row"
+    }
     return bad
 }
