@@ -20,4 +20,20 @@ class UxGuardsTest {
         check(files > 15) { "scanned only $files files: is the scan looking in the right folders?" }
         check(found.isEmpty()) { "raw exception text on screen:\n" + found.joinToString("\n") }
     }
+
+    /**
+     * Safety audit 2026-11-24 S4-1: the budget menu offered "Undo someone's changes…", but history.rs undo_by only
+     * walks the task tree, while a budget keeps envelopes, accounts and entries in the "env" / "acct" / "tx" maps
+     * (budget.rs): it always said "Nothing to undo", which in a money dispute reads as "they changed nothing".
+     * The menu item may come back only once undo knows the budget maps.
+     */
+    @Test
+    fun budgetOffersNoUndoThatCannotUndoBudgetEntries() {
+        val budget = File("../shared/src/com/jurisgames/sobres/ui/Budget.kt")
+        val history = File("../../crates/kt-tasks/src/history.rs")
+        check(budget.isFile && history.isFile) { "moved? ${budget.absolutePath} / ${history.absolutePath}" }
+        val offered = "menuUndo" in budget.readText()
+        val knowsBudget = Regex("\"tx\"").containsMatchIn(history.readText()) // pinned: budget.rs entries map name
+        check(!offered || knowsBudget) { "Budget.kt offers undo (menuUndo) but history.rs undo_by never touches the budget's \"tx\" entries" }
+    }
 }

@@ -113,7 +113,9 @@ async function overBudget(env, net, write) {
     if (over) spent.set(k, true);
     return over;
   } catch (_) {
-    return false;
+    // fails closed (S3-2 remainder, APP-RULE 71): a budget object that errors is no licence to run unlimited; this
+    // one request is deferred (429) and the next report asks again
+    return true;
   }
 }
 
@@ -129,7 +131,8 @@ export default {
     const net = netOf(req.headers.get("CF-Connecting-IP"));
     const limit = req.method === "PUT" ? env.WRITES : env.READS;
     // Fails closed (round 5, S10): a deploy that lost its limit binding answers 503 instead of running unlimited.
-    if (!limit) return new Response("limits missing", { status: 503, headers: { "Retry-After": "300" } });
+    // The day budget too (S3-2 remainder): without its BUDGET binding the deploy is refused the same way.
+    if (!limit || !env.BUDGET) return new Response("limits missing", { status: 503, headers: { "Retry-After": "300" } });
     if (!(await limit.limit({ key: net })).success) return new Response("slow down", { status: 429, headers: { "Retry-After": "60" } });
     if (await overBudget(env, net, req.method === "PUT")) return new Response("day used up", { status: 429, headers: { "Retry-After": "3600" } });
     if (req.method === "PUT") {

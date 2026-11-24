@@ -183,6 +183,7 @@ private fun Home(env: Env, openedCode: String?) {
     val node = env.node
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
+    Notice.text?.let { t -> LaunchedEffect(t) { Notice.text = null; snackbar.showSnackbar(t) } }
     // by name only: sharing a budget moves it into a group of its own, and that must not move its tab
     val lists = remember(node, env.version) { node.lists().sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name }) }
     var currentId by remember { mutableStateOf(runCatching { lastListFile(node).readText().trim() }.getOrDefault("")) }

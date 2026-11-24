@@ -267,8 +267,9 @@ fun BudgetPane(
                     item(tr("Color and icon"), "styleOpen", listMenu.style)
                     item(tr("Currency symbol"), "currencyOpen") { currency = true }
                     env.onExport?.let { ex -> item(tr("Export for a spreadsheet (CSV)"), "export") { ex(list) } }
-                    // U-S25: rolling back a partner's changes was built but unreachable.
-                    if (shared && people.size > 1) item(tr("Undo someone's changes…"), "menuUndo", listMenu.undo)
+                    // U-S25 brought back "Undo someone's changes…" here, but undo (history.rs) only knows task lists, not a
+                    // budget's envelopes and entries: it always said "Nothing to undo" (safety audit 2026-11-24 S4-1).
+                    // Off until undo covers budgets; UxGuardsTest keeps it off till then.
                     HorizontalDivider()
                     DropdownMenuItem(
                         text = { Text(tr("Delete budget"), color = MaterialTheme.colorScheme.error) },

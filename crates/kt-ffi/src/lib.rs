@@ -715,6 +715,54 @@ mod diagnostics_privacy {
     }
 }
 
+fn save_backup_file(path: &std::path::Path, bytes: &[u8], keep_prev: bool) -> Result<(), KtError> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(fail)?;
+    }
+    if keep_prev && path.exists() {
+        let _ = std::fs::copy(path, path.with_extension("prev.ktbackup"));
+    }
+    kt_engine::storage::write_atomic(path, bytes).map_err(fail)
+}
+
+#[cfg(test)]
+mod backup_prev {
+    /// pinned: S4-4: only the daily folder keeps a `.prev` copy; a picked file is just replaced.
+    #[test]
+    fn a_picked_file_is_replaced_without_a_prev_copy() {
+        let dir = std::env::temp_dir().join(format!("kt-prev-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let f = dir.join("mine.ktbackup");
+        super::save_backup_file(&f, b"old", false).unwrap();
+        super::save_backup_file(&f, b"new", false).unwrap();
+        assert_eq!(std::fs::read(&f).unwrap(), b"new");
+        assert!(!f.with_extension("prev.ktbackup").exists(), "a picked file left a .prev copy");
+        let daily = dir.join("daily.ktbackup");
+        super::save_backup_file(&daily, b"old", true).unwrap();
+        super::save_backup_file(&daily, b"new", true).unwrap();
+        assert_eq!(std::fs::read(daily.with_extension("prev.ktbackup")).unwrap(), b"old");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod undo_person {
+    use kt_tasks::app::Person;
+
+    /// Safety audit 2026-11-24 S4-2: undo found the person by name only, so with two people called the same it
+    /// could undo the other one's changes; the tag shown next to the name ("Alex · 4F2A") tells them apart.
+    #[test]
+    fn same_name_people_are_told_apart_by_their_tag() {
+        let a = Person { name: "Alex".into(), devices: vec![kt_engine::DeviceId::random()], is_me: false };
+        let b = Person { name: "Alex".into(), devices: vec![kt_engine::DeviceId::random()], is_me: false };
+        let chosen = super::person_item(&b);
+        let got = super::pick_person(vec![a, b.clone()], &chosen).expect("found");
+        assert_eq!(got.devices, b.devices, "the Alex whose tag was chosen");
+        let gone = super::PersonItem { tag: "????".into(), ..chosen };
+        assert!(super::pick_person(vec![b], &gone).is_none(), "a tag nobody has finds nobody");
+    }
+}
+
 #[cfg(test)]
 mod write_timing {
     use super::*;
@@ -796,6 +844,14 @@ fn assignee_of(devices: &[String], name: &str, people: &[(Vec<String>, PersonIte
     let key = devices.iter().min().and_then(|d| kt_engine::DeviceId::from_hex(d)).map(|d| d.0).unwrap_or_default();
     let (hue, tag) = kt_tasks::appearance::avatar(&key);
     PersonItem { initials: kt_tasks::appearance::initials(name), name: name.to_string(), is_me: false, hue, tag }
+}
+
+/// The person the screen chose: name and tag both (two people may share a name; safety audit 2026-11-24 S4-2).
+fn pick_person(people: Vec<kt_tasks::app::Person>, chosen: &PersonItem) -> Option<kt_tasks::app::Person> {
+    people.into_iter().find(|p| {
+        let i = person_item(p);
+        i.name == chosen.name && i.is_me == chosen.is_me && i.tag == chosen.tag
+    })
 }
 
 fn person_item(p: &kt_tasks::app::Person) -> PersonItem {
@@ -936,18 +992,14 @@ impl KtNode {
         if age.is_some_and(|a| a < BACKUP_EVERY) {
             return;
         }
-        let _ = self.write_backup_to(&path);
+        let _ = self.write_backup_to(&path, true);
     }
 
-    fn write_backup_to(&self, path: &std::path::Path) -> Result<(), KtError> {
+    /// `keep_prev`: the daily backup folder keeps the last copy as `.prev`; a file the person picked does not (safety
+    /// audit 2026-11-24 S4-4: the backup they meant to replace survived next to the new one, unsaid).
+    fn write_backup_to(&self, path: &std::path::Path, keep_prev: bool) -> Result<(), KtError> {
         let bytes = self.app.backup(RECOVERY_DAYS).map_err(fail)?;
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).map_err(fail)?;
-        }
-        if path.exists() {
-            let _ = std::fs::copy(path, path.with_extension("prev.ktbackup"));
-        }
-        kt_engine::storage::write_atomic(path, &bytes).map_err(fail)
+        save_backup_file(path, &bytes, keep_prev)
     }
 
     fn invite_info(&self, code: &kt_engine::invite::Code, kind: CodeKind, expires_ms: u64) -> InviteInfo {
@@ -1288,7 +1340,7 @@ impl KtNode {
 
     /// Write a sealed backup now (export, or before a risky operation).
     pub fn write_backup(&self, path: String) -> Result<(), KtError> {
-        self.write_backup_to(&PathBuf::from(path))
+        self.write_backup_to(&PathBuf::from(path), false)
     }
 
     /// Set (`Some`) or remove (`None`) the backup password (audit T11; ~0.5 s, call off the
@@ -1300,7 +1352,7 @@ impl KtNode {
             let path = dir.join(BACKUP_FILE);
             let _ = std::fs::remove_file(&path);
             let _ = std::fs::remove_file(path.with_extension("prev.ktbackup"));
-            self.write_backup_to(&path)?;
+            self.write_backup_to(&path, true)?;
         }
         Ok(())
     }
@@ -1848,7 +1900,7 @@ impl KtNode {
     /// Returns how many things were put back.
     pub fn undo_changes_by(&self, list_id: String, person: PersonItem, since_ms: u64) -> Result<u32, KtError> {
         let l = self.list(&list_id)?;
-        let p = self.app.people(&l).into_iter().find(|p| p.name == person.name && p.is_me == person.is_me).ok_or_else(|| fail("nobody by that name in this list's group"))?;
+        let p = pick_person(self.app.people(&l), &person).ok_or_else(|| fail("nobody by that name in this list's group"))?;
         let n = self.app.undo_changes_by(&l, &p, since_ms).map_err(fail)? as u32;
         self.notify();
         Ok(n)

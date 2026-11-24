@@ -30,6 +30,11 @@ object PendingRestore {
     var bytes by mutableStateOf<ByteArray?>(null)
 }
 
+/** A line the home screen shows once (desktop "Backup saved" / "Couldn't save the backup", safety audit S4-4). */
+object Notice {
+    var text by mutableStateOf<String?>(null)
+}
+
 /** Settings: set, change or remove the password backups need to open (audit T11). */
 @Composable
 fun BackupPasswordDialog(node: KtNode, onClose: () -> Unit) {
