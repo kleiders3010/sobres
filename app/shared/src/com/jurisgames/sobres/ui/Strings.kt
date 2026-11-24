@@ -292,6 +292,8 @@ val ES: Map<String, String> = mapOf(
     // appearance and settings
     "{name} (you)" to "{name} (vos)",
     "More colors…" to "Más colores…",
+    "Grey" to "Gris", "Red" to "Rojo", "Orange" to "Naranja", "Yellow" to "Amarillo", "Green" to "Verde",
+    "Teal" to "Verde azulado", "Blue" to "Azul", "Purple" to "Violeta", "Pink" to "Rosa",
     "Soft" to "Suave",
     "Normal" to "Normal",
     "Vivid" to "Intenso",

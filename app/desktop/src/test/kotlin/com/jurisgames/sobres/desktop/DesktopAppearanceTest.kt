@@ -1,5 +1,14 @@
 package com.jurisgames.sobres.desktop
 
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertHeightIsAtLeast
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertWidthIsAtLeast
+import androidx.compose.ui.unit.dp
+import com.jurisgames.sobres.ui.hueName
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -35,7 +44,12 @@ class DesktopAppearanceTest {
         rule.onNodeWithTag("list-Groceries").performClick()
         rule.onNodeWithTag("listMenu").performClick()
         rule.onNodeWithTag("styleOpen").performClick()
+        // APP-RULES 140/209 guard: each swatch is a named radio button with a 48 dp target (they were bare 32 dp dots)
+        rule.onNodeWithTag("hue-130").assert(SemanticsMatcher.expectValue(SemanticsProperties.ContentDescription, listOf(hueName(130.0))))
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton))
+            .assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp)
         rule.onNodeWithTag("hue-130").performClick()
+        rule.onNodeWithTag("hue-130").assertIsSelected()
         rule.onNodeWithTag("vivid-2").performClick()
         rule.onNodeWithTag("pick-cart").performClick()
         rule.onNodeWithTag("styleSave").performClick()
